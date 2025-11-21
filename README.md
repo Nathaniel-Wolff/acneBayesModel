@@ -30,7 +30,7 @@ This project explores how acne severity evolves in response to treatment over ti
 
 ## Key Takeaways
 
-- **Trimodal Severity States:** The KDE of normalized acne severity is bimodal, justifying a 3 category classification (low severity, medium severity, high severity).
+- **Three Severity States:** The KDE of normalized acne severity is bimodal, justifying a 3 category classification (low severity change, medium severity change, high severity change) (now validated statistically).
 - **Tightly Clustered Distributions:** Severity tends to cluster tightly around the two peaks (~60% and ~100% below baseline).
 - **Diminishing Returns:** Consecutive treatments provide reduced improvements over time, pointing toward a steady state acne severity.
 - **Steady-State Hypothesis:** Eventually, acne severity may converge toward a steady-state distribution determined by non-treatment biological factors like hormones, skin type, or diet.
@@ -64,6 +64,6 @@ This project explores how acne severity evolves in response to treatment over ti
 
 **Author:** Nathaniel Wolff
 **Contact:** [nathanielwolff1818@gmail.com; https://github.com/Nathaniel-Wolff]  
-**Status:** Draft complete, polishing in progress  
+**Status:** 2nd draft complete, polishing in progress  
 
 
