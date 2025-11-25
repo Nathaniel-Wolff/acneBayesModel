@@ -1,0 +1,14 @@
+{
+  "r_growth": 0.2,
+  "K_CC": 1, 
+  "k_antibiotics": 0.05,
+  "k_sebum": 0.05,
+  "I_bacterial_induction": 0.05,
+  "I_decay_tstd": 0.05,
+  "r_I_production": 0.05,
+  "r_cream_clean": 0.05,
+  "noise": 0.01,
+  "w_sigma": 0.01,
+  "m_sigma": 0.01
+
+}
