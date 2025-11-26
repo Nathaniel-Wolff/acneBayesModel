@@ -32,16 +32,15 @@ This project explores how acne severity evolves in response to treatment over ti
    - Plotted piecewise linear regression models to inspect which treatments are responsible for consistent gains, inferring biochemical mechanism of diminishing returns. 
 
 4. **Fitting of State-Space/Statistical Mechanistic Model, Optimization of Parameters with Expectation-Maximization/Kalman Filter Algorithm
-   - Results of item 3 suggested the following SMM Model: 
-
+   - Results of item 3 suggested the following SMM Model:
+   - $$
+     \boldsymbol{\text{Acne System State}} \;=\; v_t \;=\;
+     \begin{pmatrix}
+     B_t \\
+     I_t \\
+     S_t
+     \end{pmatrix}
      $$
-\mathbf{Acne\ System\ State} = v_t =
-\begin{pmatrix}
-B_t \\
-I_t \\
-S_t
-\end{pmatrix}
-$$
 
 
      Where $B_t$ refers to bacterial facial load at time t, $I_t$ refers to inflammatory activity load at time t, $S_t$ refers to sebum production at time t. 
