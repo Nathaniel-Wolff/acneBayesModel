@@ -34,7 +34,8 @@ This project explores how acne severity evolves in response to treatment over ti
 4. **Fitting of State-Space/Statistical Mechanistic Model, Optimization of Parameters with Expectation-Maximization/Kalman Filter Algorithm
    - Results of item 3 suggested the following SMM Model: 
 
-     $$\mathbf{Acne \,System \, State} = v_{t} = \begin{pmatrix}B_t \\I_t \\S_t\end{pmatrix}$$
+     > And acne severity evolves according to the following: 
+     ![Latent Acne System State](Latent_State.png)
 
      Where $B_t$ refers to bacterial facial load at time t, $I_t$ refers to inflammatory activity load at time t, $S_t$ refers to sebum production at time t. 
 
@@ -42,9 +43,6 @@ This project explores how acne severity evolves in response to treatment over ti
    $$B_t = B_{t-1} + r_{growth} \cdot B_{t-1}\frac{1-B_{t-1}}{K_{CC}}-k_{antibiotics} \cdot days_{antibiotics} \cdot B_{t-1} + k_{sebum} \cdot B_{t-1} \cdot S_{t-1} + noise$$
    $$I_t = I_{t-1} + I_{bacterial \, induction} \cdot B_{t-1} - I_{decay}/T(tstd)\cdot T(tstd) - I_{baseline decay} \cdot I_{t-1} + noise$$
    $$S_t = S_{t-1} + r_{I production} \cdot I_{t-1} -r_{cream \, clean} \cdot cream \, used + noise$$
-
-   > And acne severity evolves according to the following: 
-   ![Latent Acne System State](Latent_State.png)
 
 
    - Implemented Expectation-Maximization/Kalman Filter to determine model parameters.
@@ -58,7 +56,7 @@ This project explores how acne severity evolves in response to treatment over ti
 
 - **Three Severity States:** The KDE of normalized acne severity is bimodal, justifying a 3 category classification (low severity change, medium severity change, high severity change) (now validated statistically).
 - **Tightly Clustered Distributions:** Severity tends to cluster tightly around the two peaks (~60% and ~100% below baseline).
-- **Diminishing Returns:** Consecutive treatments provide reduced improvements over within certain consecutive treatment stretches, pointing toward a feedback-like mechanism govering acne severity based on bacterial load, inflammatory activity, and sebum concentration.
+- **Diminishing Returns:** Consecutive treatments provide reduced improvements over within certain consecutive treatment stretches, pointing toward a negative feedback-like mechanism govering acne severity based on bacterial load, inflammatory activity, and sebum concentration.
 - **Steady-State Hypothesis:** Eventually, acne severity may converge toward a steady-state distribution determined by non-treatment biological factors like hormones, skin type, or diet.
 
 ## Applications
