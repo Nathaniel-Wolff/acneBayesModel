@@ -31,11 +31,10 @@ This project explores how acne severity evolves in response to treatment over ti
    - Observed that improvement does not entirely plateau, but marginal gains reduce with certain successive treatments, while others maintain consistent gains with consecutive use.
    - Plotted piecewise linear regression models to inspect which treatments are responsible for consistent gains, inferring biochemical mechanism of diminishing returns. 
 
-4. **Fitting of State-Space/Statistical Mechanistic Model, Optimization of Parameters with Expectation-Maximization/Kalman Filter Algorithm**
-   - Results of item 3 suggested the following SMM Model:
-   - \(\begin{pmatrix} B_t \\ I_t \\ S_t \end{pmatrix}\)
+4. **Fitting of State-Space/Statistical Mechanistic Model, Optimization of Parameters with Expectation-Maximization/Kalman Filter Algorithm
+   - Results of item 3 suggested the following SMM Model: 
 
-
+     $$\mathbf{Acne \,System \, State} = v_{t} = \begin{pmatrix}B_t \\I_t \\S_t\end{pmatrix}$$
 
      Where $B_t$ refers to bacterial facial load at time t, $I_t$ refers to inflammatory activity load at time t, $S_t$ refers to sebum production at time t. 
 
@@ -45,7 +44,8 @@ This project explores how acne severity evolves in response to treatment over ti
    $$S_t = S_{t-1} + r_{I production} \cdot I_{t-1} -r_{cream \, clean} \cdot cream \, used + noise$$
 
    > And acne severity evolves according to the following: 
-   $$severity_{t} = C \cdot acne \, state_{t} + m_{t-1}$$
+   !(Latent_State.png)
+
 
    - Implemented Expectation-Maximization/Kalman Filter to determine model parameters.
    - Mapped inferrred latent acne system states to probabilities of acne severity state being realized with softmax of score. 
