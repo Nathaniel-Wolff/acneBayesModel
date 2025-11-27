@@ -44,7 +44,7 @@ This project explores how acne severity evolves in response to treatment over ti
    $$S_t = S_{t-1} + r_{I production} \cdot I_{t-1} -r_{cream \, clean} \cdot cream \, used + noise$$
 
    > And acne severity evolves according to the following: 
-   !(Latent_State.png)
+   ![Latent Acne System State](Latent_State.png)
 
 
    - Implemented Expectation-Maximization/Kalman Filter to determine model parameters.
