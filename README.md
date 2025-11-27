@@ -33,14 +33,7 @@ This project explores how acne severity evolves in response to treatment over ti
 
 4. **Fitting of State-Space/Statistical Mechanistic Model, Optimization of Parameters with Expectation-Maximization/Kalman Filter Algorithm**
    - Results of item 3 suggested the following SMM Model:
-   - \[
-\mathbf{Acne\ System\ State} = v_t =
-\begin{pmatrix}
-B_t \\
-I_t \\
-S_t
-\end{pmatrix}
-\]
+   - \(\begin{pmatrix} B_t \\ I_t \\ S_t \end{pmatrix}\)
 
 
 
