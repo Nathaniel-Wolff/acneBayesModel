@@ -90,7 +90,7 @@ This project explores how acne severity evolves in response to treatment over ti
 
 **Author:** Nathaniel Wolff
 **Contact:** [nathanielwolff1818@gmail.com; https://github.com/Nathaniel-Wolff]  
-**Status:** 3rd draft complete, polishing in progress
-**Date Updated:** 11-26-2025  
+**Status:** 4th draft complete,  model structure under optimization. 
+**Date Updated:** 12-17-2025  
 
 
