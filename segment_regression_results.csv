@@ -1,3 +1,3 @@
 Segment,Start,Starting History,End,Ending History,Num Points,Slope,p-value,R²
 0,25,"(('Baseline', 26),)",66,"(('Baseline', 28), ('Antibiotics', 28), ('Cream', 11))",42,0.5373,2.534e-35,0.9793
-1,83,"(('Baseline', 28), ('Antibiotics', 28), ('Cream', 28))",104,"(('Baseline', 28), ('Antibiotics', 28), ('Cream', 28), ('Antibiotics', 21))",22,0.6964,2.247e-13,0.9355
+1,83,"(('Baseline', 28), ('Antibiotics', 28), ('Cream', 28))",103,"(('Baseline', 28), ('Antibiotics', 28), ('Cream', 28), ('Antibiotics', 20))",21,0.702,2.570e-12,0.9281
