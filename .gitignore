@@ -1,0 +1,48 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.dylib
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# ---- Jupyter ----
+.ipynb_checkpoints/
+*.nbconvert.ipynb
+
+# ---- Data outputs ----
+# Fill in later after simulation mode push
+
+# ---- Model checkpoints, logs ----
+checkpoints/
+*.ckpt
+logs/
+*.log
+
+# ---- Editor specific ----
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ---- OS files ----
+.DS_Store
+Thumbs.db
+
+# ---- Project-specific ----
+# Might be filled in with simulation mode push
+
+# Temporary scratch
+# also just in case
+tmp/
+temp/
