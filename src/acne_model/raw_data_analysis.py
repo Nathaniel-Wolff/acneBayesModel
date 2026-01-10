@@ -135,22 +135,10 @@ def find_and_plot_severity_states(metadata_DFs):
     """Determines the quantile cutoff determining the quantiles corresponding to categorical acne severity states (low, medium, and high), by
     1) Computing the KDE of the distribution of all normalized acne severity scores over all patients and treatment histories.
     2) Using optimization to find the saddle point of the distribution and consolidating with the modes."""
-    fig, axes = plt.subplots(1, figsize=(5, 5))
     # collecting all severities, converting all to positive values, flattening as we go
     all_severities = []
     for df in metadata_DFs:
         all_severities.extend(df["AcneSeverity"] * -1)
-
-    # check for normal character by plotting histogram
-    severities_histo = np.histogram(all_severities, density=True)
-    # axes.hist(all_severities, bins  = 30, density = True)
-    axes.set_title("Acne Severities Distribution (relative to baseline)")
-    axes.set_xlabel("Normalized Severity Score")
-    axes.set_ylabel("Density")
-
-    # fitting a kernel density estimate to the data
-    sns.kdeplot(all_severities, fill=True)
-    plt.title("KDE of Acne Severity Distribution")
 
     # extracting the equation of the pdf and finding the local minimum in between the two modes
     kde_pdf = sp.stats.gaussian_kde(all_severities)
@@ -175,19 +163,10 @@ def find_and_plot_severity_states(metadata_DFs):
     state_ranges = [modes[0], saddle_pt.x[0], modes[1]]
     state_names = ["High Severity", "Medium Severity", "Low Severity"]
 
-    # plotting modes and saddle point over the distribution
-    plt.scatter(modes[0], kde_pdf(modes[0]), color="red", label="Lower Mode")
-    plt.scatter(modes[1], kde_pdf(modes[1]), color="red", label="Upper Mode")
-    plt.scatter([saddle_pt.x[0]], kde_pdf([saddle_pt.x[0]]), color='green', label="Saddle Point")
-
-    plt.show()
-    plt.close()
-
     return state_names, state_ranges
 
 def assign_states_to_mdfs(metadata_DFs, state_names, orig_state_ranges):
     """
-    MOVED
     Function to construct and attach a second metadata column onto each patient's dataframe. The column contains
     the acne severity categorical state corresponding to a given treatment history."""
 

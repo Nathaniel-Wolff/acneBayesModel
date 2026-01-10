@@ -3,8 +3,12 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "acne-model"
+name = "Acne-Model-Package"
 version = "0.0.1"
+description = "Acne Severity Modeling/Analysis for Clinical Decision Making Support"
+authors = [
+  { name="Nathaniel Wolff", email="nathanielwolff1818@gmail.com" }
+]
 dependencies = [
     "numpy",
     "scipy",

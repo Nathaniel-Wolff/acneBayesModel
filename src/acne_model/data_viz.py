@@ -624,11 +624,66 @@ def validate_state_assignments_with_bootstrapping_result(metadata_DFs, state_nam
 
     return fracs_changed
 
+def view_KDE(metadata_DFs):
+    """Function to view the KDE of the data by itself."""
+    """Determines the quantile cutoff determining the quantiles corresponding to categorical acne severity states (low, medium, and high), by
+        1) Computing the KDE of the distribution of all normalized acne severity scores over all patients and treatment histories.
+        2) Using optimization to find the saddle point of the distribution and consolidating with the modes."""
+    fig, axes = plt.subplots(figsize=(5, 5))
+    # collecting all severities, converting all to positive values, flattening as we go
+    all_severities = []
+    for df in metadata_DFs:
+        all_severities.extend(df["AcneSeverity"] * -1)
+
+    # check for normal character by plotting histogram
+    #severities_histo = np.histogram(all_severities, density=True)
+    axes.hist(all_severities, bins  = 30, density = True, alpha = .25)
+    axes.set_xlabel("Normalized Severity Score")
+    axes.set_ylabel("Density")
+    axes.set_title("KDE of Acne Severity Distribution")
+    axes.legend()
+
+    # fitting a kernel density estimate to the data
+    sns.kdeplot(all_severities, fill=True, ax=axes)
+
+    # extracting the equation of the pdf and finding the local minimum in between the two modes
+    kde_pdf = sp.stats.gaussian_kde(all_severities)
+
+    # using max and min of pdf to find saddle point in between 2 modes, sampling 1000 points
+    severity_grid = np.linspace(np.min(all_severities), np.max(all_severities), 1000)
+    neg_kde = lambda x: -kde_pdf(x.reshape(1, -1))
+    # finding the two main modes using optimization, with first 2 mode guesses at the .2 and .8 quantiles
+    guesses = np.percentile(all_severities, [20, 80])
+
+    modes = []
+    for guess in guesses:
+        better = optimize.minimize(neg_kde, np.array([guess]))
+        modes.append(better.x[0])
+    modes = np.array(modes)
+
+    # finding the saddle point in between the two modes, using that as cutoff for the two patient states
+    initial_guess = np.mean(modes)  # average of the modes
+    bds = [(min(modes) + 1, max(modes) - 1)]  # This is a list of two tuples for each mode
+
+    saddle_pt = optimize.minimize(kde_pdf, [initial_guess], bounds=bds)
+    state_ranges = [modes[0], saddle_pt.x[0], modes[1]]
+    state_names = ["High Severity", "Medium Severity", "Low Severity"]
+
+    # plotting modes and saddle point over the distribution
+    axes.scatter(modes[0], kde_pdf(modes[0]), color="red", label="Lower Mode")
+    axes.scatter(modes[1], kde_pdf(modes[1]), color="red", label="Upper Mode")
+    axes.scatter([saddle_pt.x[0]], kde_pdf([saddle_pt.x[0]]), color='green', label="Saddle Point")
+
+    fig.show()
+    plt.close(fig)
+
+
 def data_visualization(these_assigned_md_DFs, this_treatment_history, this_md_DFs, these_ranges):
     """Function that actually plots all relevant plots for the observed data."""
     these_checked_CIs = check_confidence_intervals(this_md_DFs, these_ranges)  # returns a dictionary now
     built_histograms, raw_probabilities = build_histograms(these_assigned_md_DFs)
-    plotted_histogram = plot_histograms(raw_probabilities)
+    this_KDE = view_KDE(these_assigned_md_DFs)
+    #plotted_histogram = plot_histograms(raw_probabilities)
 
     uninformative_prior = [1, 1, 1]  # with a1 corresponding to low severity, a2 corresponding to medium, and a3 corresponding to high
 
@@ -677,6 +732,7 @@ def bootstrap_CI_margin_of_error(actual_values, observed_quantile_values, B=5000
         plt.title(f'Smoothed bootstrap distribution for cutpoint {qhat:.2f}')
         plt.legend()
         plt.show()
+        plt.close()
 
         print(f"Cutpoint={qhat:.4f}, 95% CI=({ci_lower:.4f},{ci_upper:.4f}), MOE={moe:.4f}")
 

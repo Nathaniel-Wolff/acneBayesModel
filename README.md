@@ -74,7 +74,7 @@ This allows evaluation of the efficacy of different treatment strategies through
 
 **Author:** Nathaniel Wolff
 **Contact:** [nathanielwolff1818@gmail.com; https://github.com/Nathaniel-Wolff]  
-**Status:** 5th draft complete,  model identifiability being improved. 
-**Date Updated:** 12-31-2025  
+**Status:** 6th draft complete, Simulation Mode in progress. 
+**Date Updated:** 01-09-2026  
 
 
