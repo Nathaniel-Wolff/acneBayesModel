@@ -663,3 +663,4 @@ def model_building(these_assigned_md_DFs, these_initial_params, raw_distribution
     reparameterized = reparameterize(these_initial_params)
     this_fit_SSM = fit_latent_state_space_model(these_assigned_md_DFs, reparameterized, raw_distributions,
                                                 severity_deltas, model_config)
+    return this_fit_SSM
