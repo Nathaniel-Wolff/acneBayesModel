@@ -14,7 +14,6 @@ import numpy as np
 import seaborn as sns
 import copy
 from collections import defaultdict, Counter
-from matplotlib.cm import viridis
 import statsmodels.api as sm
 from scipy.stats import dirichlet
 from scipy.stats import beta

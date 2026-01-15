@@ -1,31 +1,14 @@
 #for training of actual model
 #imports
 
-import matplotlib
-import random
-from matplotlib import pyplot as plt
-from matplotlib.patches import Rectangle as rect
-from itertools import permutations
-from colorsys import rgb_to_hls, hls_to_rgb
 import pandas as pd
-import scipy as sp
-from scipy import optimize
 import numpy as np
-import seaborn as sns
-import copy
 from collections import defaultdict, Counter
-from matplotlib.cm import viridis
 import statsmodels.api as sm
 from scipy.stats import dirichlet
+from scipy.spatial import distance_matrix
 from scipy.stats import beta
-from scipy.special import gammaln, psi
-from scipy.ndimage import gaussian_filter1d
-from scipy.interpolate import UnivariateSpline
-from sklearn.linear_model import LinearRegression
-from sklearn.neighbors import KernelDensity
-import json
-import filterpy as fp
-import numdifftools as nd
+from sklearn.cluster import KMeans
 from functools import partial
 
 def fit_predictive_linear_regression_model_of_severity(metadata_dfs):
@@ -99,7 +82,7 @@ def fit_predictive_linear_regression_model_of_severity(metadata_dfs):
 
 def reparameterize(model_params):
     """Used to reparameterize most existing model parameters to improve identifiability."""
-    print("initial parameters", model_params)
+
     I_decay_total = model_params["I_decay_tstd"] + model_params[
         "I_baseline_decay"]  # total inflammatory decay due to both effects
     I_decay_fraction_tstd = model_params["I_decay_tstd"] / model_params[
@@ -123,17 +106,20 @@ def reparameterize(model_params):
                             "r_I_production": model_params["r_I_production"], "K_CC": model_params["K_CC"]}
     return reparameterized_dict
 
-def state_evolution_vv(v_t_last, params, history, raw_distribution, severity_deltas):
+def state_evolution_vv(v_t_last, params, history, raw_distribution, severity_deltas, index = 0):
     """Explicit function for the state evolution function, F_theta.
     Computes the next latent state, tstd.
     Then, it returns them along with the days of antibiotics used up to treatment day t and either 1 or 0 if cream was used on day t.  """
     prev_bac, prev_inf, prev_sebum = v_t_last
-    distribution_alphas = np.array(raw_distribution)
-    probs = distribution_alphas / np.sum(distribution_alphas)
+    # changed for testing purposes
+    distribution_alphas = np.array(raw_distribution) if raw_distribution is not None else None
+    probs = distribution_alphas / np.sum(distribution_alphas) if distribution_alphas is not None else None
     # ensuring severity deltas is a 1D numeric array
     severity_array = np.array(list(severity_deltas.values()) if isinstance(severity_deltas, dict) else severity_deltas,
                               dtype=float)
-    tstd_term = np.sum(probs * severity_array)
+
+    frozen_tstd = 0.1
+    tstd_term = np.sum(probs * severity_array) if probs is not None else frozen_tstd + .05 * index
 
     days_antib = history[-1][1] if history[-1][0] == "Antibiotics" else 0
     was_cream_used = 1 if history[-1][0] == "Cream" else 0
@@ -216,24 +202,18 @@ def log_prior_reparam(params, priors={
     Log-prior modified to work entirely in reparameterized space.
     Assumes all parameters are positive and uses log-normal penalties.
     """
-
     lp = 0.0
-
     for key, (mu, sigma) in priors.items():
         if key in params:
             x = params[key]
-
             # guard against numerical death
             if x <= 0:
                 return -np.inf
-
             lp += -0.5 * ((np.log(x) - mu) / sigma) ** 2
-
     return lp
 
 
-def compute_log_likelihood(raw_distributions, pred_state_vectors, scoring_params, model_parameters, severity_deltas,
-                           Q=np.diag([1e-1, 1e-1, 1e-1])):
+def compute_log_likelihood(raw_distributions, pred_state_vectors, scoring_params, model_parameters, severity_deltas, Q=np.diag([1e-1, 1e-1, 1e-1])):
     """This function is wrapped by optimize_parameters. It uses maximum-likelihood estimation
     to estimate the variance in the residuals between empirical distributions of acne severity state and distributions of
     acne severity state conditioned on a latent state.
@@ -274,15 +254,13 @@ def compute_log_likelihood(raw_distributions, pred_state_vectors, scoring_params
 
     return total_log_l
 
-
 def softmax(score):
     """Standalone softmax function."""
     exp_score = np.exp(score - np.max(score))
     return exp_score / np.sum(exp_score)
 
-
 def map_latent_states_to_severity_probs(latent_state, scoring_hyperparameters):
-    """Function used in the expectation step. It maps a latent state to a distribution over the 3 discerete acne severity change states.
+    """Function used in the expectation step. It maps a latent state to a distribution over the 3 discrete acne severity change states.
     The distribution is produced with a weighted sum (score) of how coupled each severity state is to each of the components of the latent state.
     Softmaxing converts scores into probabilities."""
 
@@ -295,8 +273,8 @@ def map_latent_states_to_severity_probs(latent_state, scoring_hyperparameters):
     W = np.array(scoring_hyperparameters["scoring"], dtype=float)  # shape (3,3)
     b = np.array(scoring_hyperparameters["biases"], dtype=float)  # shape (3,)
 
-    # Normalize latent state to prevent huge values
-    latent_norm = latent_state / (np.linalg.norm(latent_state) + 1e-6)
+    # Normalize latent state to prevent huge values??
+    #latent_norm = latent_state / (np.linalg.norm(latent_state) + 1e-6)
 
     # Linear scoring
     score = W @ latent_state + b
@@ -308,8 +286,6 @@ def map_latent_states_to_severity_probs(latent_state, scoring_hyperparameters):
     probabilities = softmax(score)
 
     return probabilities
-
-
 def unpack_reparameterized_params(reparam):
     """Used to return reparamterized parameters  """
     params = {}
@@ -344,11 +320,10 @@ def unpack_reparameterized_params(reparam):
 
     # Unaltered parameters
     params["r_cream_clean"] = reparam["r_cream_clean"]
+    params["r_I_production"] = reparam["r_I_production"]
     params["K_CC"] = reparam["K_CC"]
 
     return params
-
-
 def smm_model(prev_state, params, raw_distributions, severity_deltas, index, Q=np.diag([1e-1, 1e-1, 1e-1])):
     """Wrapper for state_evolution_vv. Uses state_evolution_vv to evaluate the model's Jacobian at the previous state
     for propagation of state uncertainity in Kalman Filtering.
@@ -362,7 +337,6 @@ def smm_model(prev_state, params, raw_distributions, severity_deltas, index, Q=n
     stochastic_evolution_output = evolution_output + np.random.multivariate_normal(mean=np.zeros(3),
                                                                                    cov=Q)  # making predicted vectors random
     return stochastic_evolution_output, tstd_term, days_antib, was_cream_used
-
 
 def optimize_hyperparameters(raw_distributions, predicted_states, scoring_hyperparams, model_params, severity_deltas,
                              learning_rate=1e-5, maximum_steps=30, clip_value=5.0):
@@ -405,10 +379,7 @@ def optimize_hyperparameters(raw_distributions, predicted_states, scoring_hyperp
         lls.append(ll)
 
     return scoring_hyperparams, lls
-
-
-def optimize_process_and_measurement_covariances(pred_state_vectors, model_params, scoring_hyperparams,
-                                                 raw_distributions, severity_deltas):
+def optimize_process_and_measurement_covariances(pred_state_vectors, model_params, scoring_hyperparams, raw_distributions, severity_deltas):
     """
     Optimize the process (Q) and measurement (R) noise covariances.
     pred_state_vectors: dict of {history_name: latent_state_vector} from the E-step
@@ -448,7 +419,6 @@ def optimize_process_and_measurement_covariances(pred_state_vectors, model_param
 
     return Q, R
 
-
 def optimize_a_linear_parameter_set(target_values, input_matrix, mu=0.0, sigma=1.0, lognormal=True):
     """Function that uses ordinary least squares to optimize a set of linear parameter from the model that correspond to one component.
     Now enforces positivity by imposing a log normal prior (unless configured otherwise) onto linear parameters."""
@@ -465,20 +435,7 @@ def optimize_a_linear_parameter_set(target_values, input_matrix, mu=0.0, sigma=1
 
     return theta
 
-
-def full_maximimzation_step(
-        pred_state_vectors,
-        raw_distributions,
-        parameters,
-        model_params,
-        state_evolution_function,
-        prev_state_vectors,
-        days_antibiotics,
-        t_tstds,
-        cream_useds,
-        severity_deltas,
-        learning_rate=1e-4,
-        max_grad_steps=30):
+def full_maximimzation_step(pred_state_vectors,raw_distributions,parameters,model_params,prev_state_vectors,days_antibiotics,t_tstds,cream_useds,severity_deltas,learning_rate=1e-4,max_grad_steps=30):
     # 1. Optimize nonlinear scoring weight and bias hyperparameters
     scoring_params, scoring_ll = optimize_hyperparameters(
         raw_distributions=raw_distributions,
@@ -538,7 +495,6 @@ def full_maximimzation_step(
     model_params["r_cream_clean"] = new_r_cream_clean
 
     return parameters, model_params
-
 
 def compute_observation_Jacobian_softmax(weights, biases, v_t):
     """Function that computes the Jacobian for Kalman gain, given the mapping between acne severity change state probability
@@ -633,7 +589,6 @@ def fit_latent_state_space_model(metadata_dfs, initial_parameters, raw_distribut
             raw_distributions=raw_distributions,
             parameters={"scoring": last_state_weights, "biases": last_state_biases},
             model_params=last_params,
-            state_evolution_function=state_evolution_fn,
             prev_state_vectors=last_predictions,
             days_antibiotics=days_antibiotics,
             t_tstds=t_tstds,
@@ -652,10 +607,9 @@ def fit_latent_state_space_model(metadata_dfs, initial_parameters, raw_distribut
         model_config["biases"] = last_state_biases
 
     standard_params = unpack_reparameterized_params(last_params)
-    print("converged model parameters", standard_params)
-    return v_predictions, standard_params
+    converged_hyperparams = {"scoring": model_config.get("scoring"), "biases": model_config.get("biases")}
 
-
+    return v_predictions, standard_params, converged_hyperparams
 def model_building(these_assigned_md_DFs, these_initial_params, raw_distributions, severity_deltas, model_config):
     """Function that contains all of the models fit to the observed data."""
     this_fit_model = fit_predictive_linear_regression_model_of_severity(these_assigned_md_DFs)
@@ -664,3 +618,66 @@ def model_building(these_assigned_md_DFs, these_initial_params, raw_distribution
     this_fit_SSM = fit_latent_state_space_model(these_assigned_md_DFs, reparameterized, raw_distributions,
                                                 severity_deltas, model_config)
     return this_fit_SSM
+
+
+def latent_state_clustering(predicted_latent_trajectory):
+    """Function that applies clustering methods to the predicted latent state trajectory for
+    later trajectory inference. Prunes and merges clusters that are too small."""
+    clusters = KMeans(random_state=0)
+    labels = clusters.fit_predict(predicted_latent_trajectory)
+    regions = clusters.cluster_centers_
+    regions_distances = distance_matrix(regions, regions) #distances between clusters
+    counts = np.bincount(labels)
+
+    #merging small clusters
+    new_labels, active = merge_minimal_clusters(
+        labels, counts, regions_distances, threshold=10
+    )
+
+    #re-indexing labels
+    unique = np.unique(labels)
+    label_map = {old: new for new, old in enumerate(unique)}
+    labels = np.array([label_map[l] for l in new_labels])
+
+    # Recompute centers and counts
+    new_centers = recalculate_merged_cluster_centers(predicted_latent_trajectory, labels)
+    counts = np.bincount(labels)
+
+    return new_centers, labels, counts, regions_distances
+
+def merge_minimal_clusters(labels, counts, Distances, threshold = 10):
+    """Merges clusters with too few points by assigning them to the closest clusters."""
+    labels = labels.copy()
+    counts = counts.copy()
+    cluster_numbers = len(counts)
+
+    #active clusters
+    active_clusters = np.ones(cluster_numbers, dtype = bool)
+    for cluster_index in np.argsort(counts):
+        if not active_clusters[cluster_index]: #skip inactive clusters until completing
+            continue
+        if counts[cluster_index] >= threshold:
+            continue
+        #excluding self and already inactive clusters for efficiency
+        valid = np.where(active_clusters & (np.arange(cluster_numbers) != cluster_index))[0]
+        if len(valid) == 0:
+            continue
+        nearest_cluster = valid[np.argmin(Distances[cluster_index, valid])]
+
+        #reassigning labels
+        labels[labels == cluster_index] = nearest_cluster
+
+        # Update counts
+        counts[nearest_cluster] += counts[cluster_index]
+        counts[cluster_index] = 0
+        active_clusters[cluster_index] = False
+
+    return labels, active_clusters
+
+def recalculate_merged_cluster_centers(latent_states, labels):
+    """Reassigns points to corrected clusters, having recalculated the center."""
+    centers = []
+    latent_states = np.asarray(latent_states)
+    for c in np.unique(labels):
+        centers.append(latent_states[labels == c].mean(axis=0))
+    return np.vstack(centers)
