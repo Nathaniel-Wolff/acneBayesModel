@@ -4,7 +4,6 @@
   "k_antibiotics": 0.2,
   "k_sebum": 0.01,
   "I_bacterial_induction": 0.15,
-  "I_decay_tstd": 0.35,
   "I_baseline_decay": 0.3,
   "r_I_production": 0.1,
   "r_cream_clean": 0.125,

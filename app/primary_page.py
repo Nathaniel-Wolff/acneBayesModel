@@ -7,7 +7,8 @@ from acne_model import data_parsing, model_building
 from acne_model.model import state_evolution_vv as evolution_function
 from acne_model.model import reparameterize
 from acne_model.model import map_latent_states_to_severity_probs as severity_distribution_function
-from acne_model.model import latent_state_clustering
+from acne_model.model import compute_cluster_dirichlets, assign_label
+from collections import defaultdict
 
 st.title("Acne Severity Analysis")
 
@@ -29,13 +30,11 @@ def calling_model(this_raw_data_name, json_name):
     #reparameterization and the reverse are both done in the function itself now
     this_built_model = model_building(data_returns[1], initial_constant_guesses, these_dirichlets, these_averages,
                                       this_model_config)
-    st.write(this_built_model)
-    return this_built_model, these_averages
+    st.write(this_built_model[1])
+    return this_built_model, these_averages, these_dirichlets
 def build_trajectory(**kwargs):
     """Function to create a new treatment trajectory given the everpresent widgets above."""
-
     #parse out treatment ends into full history
-
     if st.session_state.commit_requested:
         # Log current slider values as events if not already in draft_trajectory
         st.session_state.commit_requested = False
@@ -66,30 +65,41 @@ def build_trajectory(**kwargs):
         st.session_state.debug_last_commit = full_history
 
         return full_history
-def compute_severity_series(fitted_model_params, severity_deltas, scoring_hyperparams, trajectory, initial_state):
-    """"Function using the fitted model params to predict a severity series for a given treatment trajectory."""
+def compute_severity_series(fitted_model_params, severity_deltas, scoring_hyperparams, trajectory, initial_state, centers, labels, dirichlets):
+    """"Function using the fitted model params to predict a latent state for a given treatment trajectory."""
     last_latent_state = initial_state
+    pred_latent_states = []
+    dirs_and_expectations = defaultdict(tuple)
+    histories = []
 
-    #FOR TESTING PURPOSES, TSTD is a frozen hardcoded value. In the future, it'll be returned from the training data
-
-    expected_severity_changes = []
+    #collecting Dirichlets
     for index, history_day in enumerate(trajectory):
         reparams = reparameterize(fitted_model_params)
-
         output_latent_state, unused_tstd, days_antibiotics, cream_used = evolution_function(v_t_last = last_latent_state, params = reparams, raw_distribution = None, severity_deltas = severity_deltas,
                                     index = index, history = history_day)
+
+        label = assign_label(output_latent_state, centers)
+        actual_label = str(labels[label])
+        fetched_dirichlet = dirichlets[actual_label]
+        pred_latent_states.append(output_latent_state)
 
         this_severity_distribution = severity_distribution_function(output_latent_state, scoring_hyperparams)
         #computing expected change, given the distribution as a simple mean
         severities_deltas_array = np.array(list(severity_deltas.values()))
 
         expected_severity_change = np.average(a=severities_deltas_array, weights=this_severity_distribution, axis = 0)
-        expected_severity_changes.append(expected_severity_change)
+        dirs_and_expectations[index] = (expected_severity_change, fetched_dirichlet)
+        histories.append(history_day)
 
-        #finding uncertainity bands
-        #correct_posterior =
+        last_latent_state = output_latent_state
 
-        #st.write("expected severity change", expected_severity_change)
+    return dirs_and_expectations, histories
+
+
+def plot_severity_series(plot):
+    pass
+
+
 def antibiotics_changed():
     st.session_state.draft_trajectory.append(
         ("Antibiotics", st.session_state.draft_antibiotics)
@@ -110,7 +120,6 @@ def commit_trajectory():
 def main():
     """
     """
-
     # Clinician Input Sliders
     st.header("Treatment Inputs")
 
@@ -171,23 +180,26 @@ def main():
 
     build_trajectory()
 
-    this_called_model, these_deltas = calling_model("sim_acne.csv", "initial_constants.json")
+    this_called_model, these_deltas, observed_dirichlets = calling_model("sim_acne.csv", "initial_constants.json")
+
+    these_inferred_latent_states = list(this_called_model[0].values())
+    clustered_states, these_clusters = compute_cluster_dirichlets(these_inferred_latent_states, observed_dirichlets)
+    these_new_centers, these_labels, these_counts, these_regions_distances = these_clusters
 
     for trajectory in st.session_state.trajectories:
         computed_severity_series = compute_severity_series(fitted_model_params=this_called_model[1], severity_deltas=these_deltas,
-            trajectory=trajectory, scoring_hyperparams=this_called_model[2], initial_state=configured_initial_state)
+            trajectory=trajectory, scoring_hyperparams=this_called_model[2], initial_state=configured_initial_state, centers = these_new_centers, labels = these_labels,
+                                                           dirichlets=clustered_states)
 
-    these_inferred_latent_states = list(this_called_model[0].values())
-    clustered_states = latent_state_clustering(these_inferred_latent_states)
-    st.write("states", clustered_states)
+
+    for trajectory in st.session_state.trajectories:
+        for history_day in trajectory:
+            pass
 
     fig, ax = plt.subplots()
     #ax.scatter(antibiotics_days, retinol_days)
     # other plotting actions...
     st.pyplot(fig)
-
-
-
 
 if __name__ == "__main__":
     main()

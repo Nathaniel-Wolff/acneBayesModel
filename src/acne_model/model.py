@@ -10,6 +10,7 @@ from scipy.spatial import distance_matrix
 from scipy.stats import beta
 from sklearn.cluster import KMeans
 from functools import partial
+from scipy.spatial.distance import cdist
 
 def fit_predictive_linear_regression_model_of_severity(metadata_dfs):
     """Function to fit a predictive linear model of acne severity as a function of:
@@ -83,10 +84,8 @@ def fit_predictive_linear_regression_model_of_severity(metadata_dfs):
 def reparameterize(model_params):
     """Used to reparameterize most existing model parameters to improve identifiability."""
 
-    I_decay_total = model_params["I_decay_tstd"] + model_params[
-        "I_baseline_decay"]  # total inflammatory decay due to both effects
-    I_decay_fraction_tstd = model_params["I_decay_tstd"] / model_params[
-        "I_baseline_decay"]  # inflammatory activity due to treatment alone
+    I_decay_total =  model_params[
+        "I_baseline_decay"]  # total inflammatory decay due to decay (not actually reparameterized without tstd)
     I_drive_bacterial_relative = model_params["I_bacterial_induction"] * model_params[
         "r_growth"]  # bacterial inflammation induction with growth rate complementing
     I_drive_bacterial_ratio = model_params["I_bacterial_induction"] / model_params[
@@ -98,7 +97,7 @@ def reparameterize(model_params):
     k_antibiotics_scaled = model_params["k_antibiotics"] * t
     I_decay_scaled = I_decay_total * t
 
-    reparameterized_dict = {"I_decay_scaled": I_decay_scaled, "I_decay_fraction_tstd": I_decay_fraction_tstd,
+    reparameterized_dict = {"I_decay_scaled": I_decay_scaled,
                             "I_drive_bacterial_relative": I_drive_bacterial_relative,
                             "I_drive_bacterial_ratio": I_drive_bacterial_ratio,
                             "k_sebum_scaled": k_sebum_scaled, "k_antibiotics_scaled": k_antibiotics_scaled, "t": t,
@@ -117,9 +116,10 @@ def state_evolution_vv(v_t_last, params, history, raw_distribution, severity_del
     # ensuring severity deltas is a 1D numeric array
     severity_array = np.array(list(severity_deltas.values()) if isinstance(severity_deltas, dict) else severity_deltas,
                               dtype=float)
-
-    frozen_tstd = 0.1
-    tstd_term = np.sum(probs * severity_array) if probs is not None else frozen_tstd + .05 * index
+    #removed tstd from evolution to infer from clustering analysis below
+    #frozen_tstd = 0.1
+    #tstd_term = np.sum(probs * severity_array) if probs is not None else frozen_tstd + .05 * index
+    tstd_term = 0
 
     days_antib = history[-1][1] if history[-1][0] == "Antibiotics" else 0
     was_cream_used = 1 if history[-1][0] == "Cream" else 0
@@ -134,11 +134,12 @@ def state_evolution_vv(v_t_last, params, history, raw_distribution, severity_del
     k_seb = params["k_sebum_scaled"] / t
 
     # inflammation
-    f = params["I_decay_fraction_tstd"]
+    #f = params["I_decay_fraction_tstd"]
     I_decay_total = params["I_decay_scaled"] / t
 
-    I_baseline_decay = I_decay_total / (1 + f)
-    I_decay_tstd = (f / (1 + f)) * I_decay_total
+    I_baseline_decay = I_decay_total
+    #removed point estimate tstd
+    #I_decay_tstd = (f / (1 + f)) * I_decay_total
 
     # bacterial inflammation drive
     I_bacterial_induction = np.sqrt(
@@ -153,11 +154,10 @@ def state_evolution_vv(v_t_last, params, history, raw_distribution, severity_del
             - k_abx * days_antib * prev_bac
             + k_seb * prev_bac * prev_sebum
     )
-
+    #removed point estimate tstd
     cur_inf = (
             prev_inf
             + I_bacterial_induction * prev_bac
-            - I_decay_tstd * tstd_term
             - I_baseline_decay * prev_inf
     )
 
@@ -185,7 +185,6 @@ def log_prior_reparam(params, priors={
 
     # inflammation decay structure
     "I_decay_scaled": (0.0, 0.5),
-    "I_decay_fraction_tstd": (0.0, 0.5),
 
     # bacterial → inflammation coupling
     "I_drive_bacterial_relative": (0.0, 0.5),
@@ -306,12 +305,10 @@ def unpack_reparameterized_params(reparam):
     I_decay_scaled = reparam["I_decay_scaled"]
     I_decay_total = I_decay_scaled / t
 
-    frac = reparam["I_decay_fraction_tstd"]
+    #removed point estimate tstd
 
-    I_baseline_decay = I_decay_total / (1.0 + frac)
-    I_decay_tstd = frac * I_baseline_decay
+    I_baseline_decay = I_decay_total /1.0
 
-    params["I_decay_tstd"] = I_decay_tstd
     params["I_baseline_decay"] = I_baseline_decay
 
     # Interaction rates
@@ -435,7 +432,7 @@ def optimize_a_linear_parameter_set(target_values, input_matrix, mu=0.0, sigma=1
 
     return theta
 
-def full_maximimzation_step(pred_state_vectors,raw_distributions,parameters,model_params,prev_state_vectors,days_antibiotics,t_tstds,cream_useds,severity_deltas,learning_rate=1e-4,max_grad_steps=30):
+def full_maximimzation_step(pred_state_vectors,raw_distributions,parameters,model_params,prev_state_vectors,days_antibiotics,cream_useds,severity_deltas,learning_rate=1e-4,max_grad_steps=30):
     # 1. Optimize nonlinear scoring weight and bias hyperparameters
     scoring_params, scoring_ll = optimize_hyperparameters(
         raw_distributions=raw_distributions,
@@ -471,17 +468,17 @@ def full_maximimzation_step(pred_state_vectors,raw_distributions,parameters,mode
     # 3b. Inflammation component
     inf_targets = np.array([v[1] for v in pred_state_vectors.values()])
 
+    #point estimates tstds removed
     inf_inputs = np.column_stack([
         [v_prev[0] for v_prev in prev_state_vectors.values()],
-        safe_slice(t_tstds, len(inf_targets)),
         [v_prev[1] for v_prev in prev_state_vectors.values()]])
 
-    new_I_drive_rel, new_I_decay_total, new_I_decay_frac = optimize_a_linear_parameter_set(
+    new_I_drive_rel, new_I_decay_total = optimize_a_linear_parameter_set(
         inf_targets, inf_inputs)
 
     model_params["I_drive_bacterial_relative"] = np.clip(new_I_drive_rel, 1e-6, 10.0)
     model_params["I_decay_scaled"] = np.clip(new_I_decay_total * model_params["t"], 1e-6, 10.0)
-    model_params["I_decay_fraction_tstd"] = np.clip(new_I_decay_frac, 1e-3, 10.0)
+    #model_params["I_decay_fraction_tstd"] = np.clip(new_I_decay_frac, 1e-3, 10.0)
 
     # 3c. Sebum component
     seb_targets = np.array([v[2] for v in pred_state_vectors.values()])
@@ -507,14 +504,12 @@ def compute_observation_Jacobian_softmax(weights, biases, v_t):
     J_obs_softmax = J_softmax @ weights.T
     return J_obs_softmax
 
-
 def compute_transition_log_likelihood(v_t, v_t_pred, Q):
     """Function used to add noise likelihood to existing likelihood (generative prior)."""
     diff = v_t - v_t_pred
     Q_inv = np.linalg.inv(Q)
     logdetQ = np.log(np.linalg.det(Q))
     return -0.5 * diff.T @ Q_inv @ diff - 0.5 * logdetQ
-
 
 def fit_latent_state_space_model(metadata_dfs, initial_parameters, raw_distributions, severity_deltas, model_config,
                                  max_iterations=20):
@@ -545,13 +540,8 @@ def fit_latent_state_space_model(metadata_dfs, initial_parameters, raw_distribut
 
     # Store initial predictions
     v_predictions = {first_history: z_first}
-    # covariance_predictions = {first_history: initial_covariance}
-    t_tstds = [t_first]
-    days_antibiotics = [days_first]
-    cream_useds = [cream_first]
 
     last_state = z_first
-    # last_uncertainties = initial_covariance
     last_predictions = {h: initial_states_guess.copy() for h in histories}
 
     # ---- EM ----
@@ -577,12 +567,6 @@ def fit_latent_state_space_model(metadata_dfs, initial_parameters, raw_distribut
 
         # ---- Maximization Step ----
         # Create a partial of smm_model for Q/R optimization
-        state_evolution_fn = partial(
-            smm_model,
-            params=last_params,
-            raw_distributions=raw_distributions,
-            severity_deltas=severity_deltas
-        )
 
         updated_parameters, last_params = full_maximimzation_step(
             pred_state_vectors=v_predictions,
@@ -591,7 +575,6 @@ def fit_latent_state_space_model(metadata_dfs, initial_parameters, raw_distribut
             model_params=last_params,
             prev_state_vectors=last_predictions,
             days_antibiotics=days_antibiotics,
-            t_tstds=t_tstds,
             cream_useds=cream_useds,
             severity_deltas=severity_deltas,
             learning_rate=1e-3,
@@ -618,7 +601,6 @@ def model_building(these_assigned_md_DFs, these_initial_params, raw_distribution
     this_fit_SSM = fit_latent_state_space_model(these_assigned_md_DFs, reparameterized, raw_distributions,
                                                 severity_deltas, model_config)
     return this_fit_SSM
-
 
 def latent_state_clustering(predicted_latent_trajectory):
     """Function that applies clustering methods to the predicted latent state trajectory for
@@ -681,3 +663,27 @@ def recalculate_merged_cluster_centers(latent_states, labels):
     for c in np.unique(labels):
         centers.append(latent_states[labels == c].mean(axis=0))
     return np.vstack(centers)
+
+def compute_cluster_dirichlets(empirical_latent_state_trajectory, dirichlets_and_histories):
+    """Function to compute Dirichlets for different clusters of latent states. Wraps latent_state_clustering above."""
+    pruned_clusters = latent_state_clustering(empirical_latent_state_trajectory)
+    cluster_and_dirichets = defaultdict(list)
+    cluster_and_fixed = {}
+
+    for index, latent_state in enumerate(empirical_latent_state_trajectory):
+        corresponding_dirichlet = list(dirichlets_and_histories.values())[index]
+        removed_prior = np.array([item-1 for item in corresponding_dirichlet])
+        which_cluster = str(pruned_clusters[1][index])
+        cluster_and_dirichets[which_cluster].append(removed_prior)
+
+    for cluster, dirichlets in cluster_and_dirichets.items():
+        added_dirichlets = np.sum(dirichlets, axis=0).tolist()
+        cluster_and_fixed[cluster] = added_dirichlets + np.array([1, 1, 1]) #uninformative prior
+
+    return cluster_and_fixed, pruned_clusters
+
+def assign_label(x, centers):
+    """Function to assign labels to latent states to a label in clustering."""
+    x = np.asarray(x)
+    centers = np.asarray(centers)
+    return np.argmin(np.linalg.norm(centers - x, axis=1))

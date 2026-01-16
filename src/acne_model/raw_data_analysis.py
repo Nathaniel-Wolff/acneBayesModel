@@ -1,31 +1,12 @@
 #for raw data analysis functions
 
 #imports
-import matplotlib
-import random
-from matplotlib import pyplot as plt
-from matplotlib.patches import Rectangle as rect
-from itertools import permutations
-from colorsys import rgb_to_hls, hls_to_rgb
 import pandas as pd
 import scipy as sp
 from scipy import optimize
 import numpy as np
-import seaborn as sns
-import copy
 from collections import defaultdict, Counter
-import statsmodels.api as sm
 from scipy.stats import dirichlet
-from scipy.stats import beta
-from scipy.special import gammaln, psi
-from scipy.ndimage import gaussian_filter1d
-from scipy.interpolate import UnivariateSpline
-from sklearn.linear_model import LinearRegression
-from sklearn.neighbors import KernelDensity
-import json
-import filterpy as fp
-import numdifftools as nd
-from functools import partial
 
 def seperate_patients(raw_data):
     """Function that separates the raw dataframe via the following:

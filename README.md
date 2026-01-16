@@ -43,6 +43,9 @@ This allows evaluation of the efficacy of different treatment strategies through
    *This model enabled direct testing of potential treatment regimes for outcome efficacy and cost-optimization.
    Model equations and EM/GEM implementation can be found in the corresponding Jupyter Notebook.*
 
+   *Latent dynamics parameters are fixed at a representative maximum likelihood estimate due to structural non-identifiability given available data. 
+   Future versions of the model will introduce biologically informed priors.*
+
 ## Applications
 
 1. **Clinical Decision Support:**
