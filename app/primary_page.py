@@ -1,13 +1,16 @@
 #the initial page for the streamlit app
 import streamlit as st
 from matplotlib import pyplot as plt
+from matplotlib.widgets import Slider
 import json
 import numpy as np
 from acne_model import data_parsing, model_building
+from scipy.stats import beta
 from acne_model.model import state_evolution_vv as evolution_function
 from acne_model.model import reparameterize
 from acne_model.model import map_latent_states_to_severity_probs as severity_distribution_function
 from acne_model.model import compute_cluster_dirichlets, assign_label
+from acne_model.data_viz import find_dirichlet_marginal_cis
 from collections import defaultdict
 
 st.title("Acne Severity Analysis")
@@ -96,9 +99,56 @@ def compute_severity_series(fitted_model_params, severity_deltas, scoring_hyperp
     return dirs_and_expectations, histories
 
 
-def plot_severity_series(plot):
-    pass
+def plot_severity_series(plot, axis, trajectories_dirichlets, window_size = 2, confidence_level = .95, width = 1):
+    """Function to plot Dirichlet credible intervals over a plot."""
+    colors = ["tab:green", "tab:gray", "tab:red"]
+    labels = ["High Decrease", "Medium Decrease", "Low Decrease"]
 
+    day = st.session_state.day
+
+    start_limit = day
+    end_limit = start_limit + window_size
+
+    for trajectory in trajectories_dirichlets:
+        T = len(trajectory)
+        t = np.arange(T)
+
+        means = {k: [] for k in range(3)}
+        low = {k: [] for k in range(3)}
+        high = {k: [] for k in range(3)}
+        for index, (expected_val, dirichlet) in trajectory.items():
+            alpha = np.array(dirichlet)
+            alpha0 = alpha.sum()
+
+            for k in range(3):
+                means[k].append(alpha[k] / alpha0)
+                low[k].append(beta.ppf(0.025, alpha[k], alpha0 - alpha[k]))
+                high[k].append(beta.ppf(0.975, alpha[k], alpha0 - alpha[k]))
+
+        for k, (label, color) in enumerate(zip(labels, colors)):
+            plot.plot(t[start_limit:end_limit], means[k][start_limit:end_limit], color=color, label=label)
+            plot.fill_between(
+                t[start_limit:end_limit],
+                low[k][start_limit:end_limit],
+                high[k][start_limit:end_limit],
+                color=color,
+                alpha=0.25
+            )
+
+        plot.set_xlim(start_limit, end_limit)
+        plot.set_ylim(0, 1)
+        plot.set_xlabel("Day")
+        plot.set_ylabel("Probability")
+        plot.legend()
+
+    handles, labels = plt.gca().get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+
+    # Plot the legend using only the unique handles and labels
+    ax = plt.gca()  # Get the current axis
+    ax.relim()  # Recompute the data limits
+    ax.autoscale_view(True, True, True)  # Apply the new limits to all axes
+    plt.legend(by_label.values(), by_label.keys())
 
 def antibiotics_changed():
     st.session_state.draft_trajectory.append(
@@ -117,6 +167,9 @@ def commit_trajectory():
     # reset sliders
     st.session_state.draft_antibiotics = 0
     st.session_state.draft_retinol = 0
+
+def set_window():
+    pass
 def main():
     """
     """
@@ -149,6 +202,22 @@ def main():
 
     if "commit_requested" not in st.session_state:
         st.session_state.commit_requested = False
+
+    if "day" not in st.session_state:
+        st.session_state.day = 0
+    if "window_size" not in st.session_state:
+        st.session_state.window_size = 10
+    if "T" not in st.session_state:
+        st.session_state.T= 20
+
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("⬅️ Previous"):
+            st.session_state.day = max(0, st.session_state.day - 1)
+    with col2:
+        if st.button("Next ➡️"):
+            st.session_state.day = min(st.session_state.T - st.session_state.window_size, st.session_state.day + 1)
 
     initial_inflammatory_state = st.slider("Inflammation", 0.0, 1.0, 0.1)
     initial_sebum = st.slider("Sebum", 0.0, 1.0, 0.1)
@@ -186,19 +255,17 @@ def main():
     clustered_states, these_clusters = compute_cluster_dirichlets(these_inferred_latent_states, observed_dirichlets)
     these_new_centers, these_labels, these_counts, these_regions_distances = these_clusters
 
+    all_severity_series = []
     for trajectory in st.session_state.trajectories:
-        computed_severity_series = compute_severity_series(fitted_model_params=this_called_model[1], severity_deltas=these_deltas,
+        computed_severity_series, histories = compute_severity_series(fitted_model_params=this_called_model[1], severity_deltas=these_deltas,
             trajectory=trajectory, scoring_hyperparams=this_called_model[2], initial_state=configured_initial_state, centers = these_new_centers, labels = these_labels,
                                                            dirichlets=clustered_states)
+        all_severity_series.append(computed_severity_series)
 
-
-    for trajectory in st.session_state.trajectories:
-        for history_day in trajectory:
-            pass
 
     fig, ax = plt.subplots()
-    #ax.scatter(antibiotics_days, retinol_days)
-    # other plotting actions...
+
+    plotted_trajectories = plot_severity_series(ax, fig, all_severity_series, confidence_level=.95)
     st.pyplot(fig)
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ from scipy import optimize
 import numpy as np
 import seaborn as sns
 import copy
-from collections import defaultdict, Counter
+from collections import defaultdict
 from matplotlib.cm import viridis
 import statsmodels.api as sm
 from scipy.stats import dirichlet
@@ -25,10 +25,7 @@ from scipy.ndimage import gaussian_filter1d
 from scipy.interpolate import UnivariateSpline
 from sklearn.linear_model import LinearRegression
 from sklearn.neighbors import KernelDensity
-import json
-import filterpy as fp
-import numdifftools as nd
-from functools import partial
+from raw_data_analysis import assign_states_to_mdfs
 
 def check_confidence_intervals(metadata_DFs, quantiles):
     """Checking the confidence intervals of the quantiles to ensure they don't overlap."""
@@ -193,7 +190,7 @@ def plot_Dirichlets_credible_interals(histories_and_dirichlets, ordered_categori
 
     # checking to see if no categories are supplied; just uses indices of each state to name categories in that case
     if ordered_categories is None:
-        ordered_categories = [f"State {i}" for i in range(len(dirichlet_posteriors[0]))]
+        ordered_categories = [f"State {i}" for i in range(len(histories_and_dirichlets[0]))]
 
     fig, ax = plt.subplots(len(ordered_categories), 1, figsize=(len(ordered_categories) * 3.5, 7), sharex=True)
     ax[-1].set_xlabel("History Index")
@@ -204,8 +201,6 @@ def plot_Dirichlets_credible_interals(histories_and_dirichlets, ordered_categori
 
         these_confidence_intervals = find_dirichlet_marginal_cis(alphas)
         for subplot_index, ordered_confidence_interval in these_confidence_intervals.items():
-            # ax[subplot_index].set_xticks(np.arange(len(histories_and_dirichlets)))
-            # ax[subplot_index].set_xticklabels(list(histories_and_dirichlets.keys()))
             x = left_end + (subplot_index - len(
                 these_confidence_intervals) / 2) * jitter_spacing  # adding some x offset for the error bars
             center = (ordered_confidence_interval[1] + ordered_confidence_interval[0]) / 2
