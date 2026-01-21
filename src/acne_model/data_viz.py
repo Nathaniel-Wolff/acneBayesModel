@@ -25,7 +25,7 @@ from scipy.ndimage import gaussian_filter1d
 from scipy.interpolate import UnivariateSpline
 from sklearn.linear_model import LinearRegression
 from sklearn.neighbors import KernelDensity
-from raw_data_analysis import assign_states_to_mdfs
+from acne_model.raw_data_analysis import assign_states_to_mdfs
 
 def check_confidence_intervals(metadata_DFs, quantiles):
     """Checking the confidence intervals of the quantiles to ensure they don't overlap."""

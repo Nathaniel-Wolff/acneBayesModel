@@ -1,7 +1,6 @@
 #the initial page for the streamlit app
 import streamlit as st
 from matplotlib import pyplot as plt
-from matplotlib.widgets import Slider
 import json
 import numpy as np
 from acne_model import data_parsing, model_building
@@ -10,10 +9,10 @@ from acne_model.model import state_evolution_vv as evolution_function
 from acne_model.model import reparameterize
 from acne_model.model import map_latent_states_to_severity_probs as severity_distribution_function
 from acne_model.model import compute_cluster_dirichlets, assign_label
-from acne_model.data_viz import find_dirichlet_marginal_cis
 from collections import defaultdict
 
 st.title("Acne Severity Analysis")
+st.set_page_config(layout="wide")
 
 #calling the model with test dataset
 def calling_model(this_raw_data_name, json_name):
@@ -99,15 +98,18 @@ def compute_severity_series(fitted_model_params, severity_deltas, scoring_hyperp
     return dirs_and_expectations, histories
 
 
-def plot_severity_series(plot, axis, trajectories_dirichlets, window_size = 2, confidence_level = .95, width = 1):
+def plot_severity_series(plot, axis, trajectories_dirichlets, severity_deltas, window_size = 20, confidence_level = .95, width = 1):
     """Function to plot Dirichlet credible intervals over a plot."""
     colors = ["tab:green", "tab:gray", "tab:red"]
     labels = ["High Decrease", "Medium Decrease", "Low Decrease"]
 
     day = st.session_state.day
+    initial_severity = st.session_state.initial_severity
 
     start_limit = day
     end_limit = start_limit + window_size
+
+    real_deltas = list(severity_deltas.values())
 
     for trajectory in trajectories_dirichlets:
         T = len(trajectory)
@@ -126,19 +128,21 @@ def plot_severity_series(plot, axis, trajectories_dirichlets, window_size = 2, c
                 high[k].append(beta.ppf(0.975, alpha[k], alpha0 - alpha[k]))
 
         for k, (label, color) in enumerate(zip(labels, colors)):
-            plot.plot(t[start_limit:end_limit], means[k][start_limit:end_limit], color=color, label=label)
+            real_delta = real_deltas[k]
+            # *np.ones(len(means[k][start_limit:end_limit]))*real_delta
+            plot.plot(t[start_limit:end_limit], (means[k][start_limit:end_limit]), color=color, label=label)
             plot.fill_between(
                 t[start_limit:end_limit],
-                low[k][start_limit:end_limit],
-                high[k][start_limit:end_limit],
+                (low[k][start_limit:end_limit]),#*np.ones(len(low[k][start_limit:end_limit]))*real_delta,
+                (high[k][start_limit:end_limit]),#*np.ones(len(high[k][start_limit:end_limit]))*real_delta,
                 color=color,
                 alpha=0.25
             )
 
         plot.set_xlim(start_limit, end_limit)
-        plot.set_ylim(0, 1)
+        #plot.set_ylim(0, 1)
         plot.set_xlabel("Day")
-        plot.set_ylabel("Probability")
+        plot.set_ylabel("Acne Severity Percentage")
         plot.legend()
 
     handles, labels = plt.gca().get_legend_handles_labels()
@@ -150,6 +154,8 @@ def plot_severity_series(plot, axis, trajectories_dirichlets, window_size = 2, c
     ax.autoscale_view(True, True, True)  # Apply the new limits to all axes
     plt.legend(by_label.values(), by_label.keys())
 
+def baseline_sev_changed():
+    st.session_state.baseline_severity = st.session_state.draft_severity
 def antibiotics_changed():
     st.session_state.draft_trajectory.append(
         ("Antibiotics", st.session_state.draft_antibiotics)
@@ -171,8 +177,6 @@ def commit_trajectory():
 def set_window():
     pass
 def main():
-    """
-    """
     # Clinician Input Sliders
     st.header("Treatment Inputs")
 
@@ -195,6 +199,9 @@ def main():
     if "draft_trajectory" not in st.session_state:
         st.session_state.draft_trajectory = []
 
+    if "these_deltas" not in st.session_state:
+        st.session_state.these_deltas = {}
+
     if st.session_state.get("_reset_sliders", False):
         st.session_state.draft_antibiotics = 0
         st.session_state.draft_retinol = 0
@@ -210,6 +217,12 @@ def main():
     if "T" not in st.session_state:
         st.session_state.T= 20
 
+    if "draft_severity" not in st.session_state:
+        st.session_state.draft_severity = 1.0
+
+    if "initial_severity" not in st.session_state:
+        st.session_state.initial_severity = 1.0
+
 
     col1, col2 = st.columns(2)
     with col1:
@@ -223,8 +236,9 @@ def main():
     initial_sebum = st.slider("Sebum", 0.0, 1.0, 0.1)
     initial_bacterial_load = st.slider("Bacterial Load", 0.0, 1.0, 0.1)
 
-    initial_inflamatory_state = st.number_input("Patient's Initial Severity")
-    initial_baseline_severity = st.number_input("Patient's Baseline Severity")
+    #initial_inflamatory_state = st.number_input("Patient's Initial Severity")
+    initial_baseline_severity = st.number_input("Patient's Initial Severity", help = "(Pre-Normalize for best results)", key = "draft_severity", on_change = baseline_sev_changed())
+
 
     antibiotics_days = st.slider(
     "Days of Antibiotics",
@@ -240,6 +254,9 @@ def main():
     key="draft_retinol",
     on_change=retinol_changed)
 
+    selected_window_size = st.number_input("Window Size", min_value = 1, width = "stretch")
+    st.session_state.window_size = selected_window_size
+
     st.session_state._reset_sliders = False
 
     configured_initial_state = np.array([initial_bacterial_load, initial_inflammatory_state, initial_sebum])
@@ -250,6 +267,7 @@ def main():
     build_trajectory()
 
     this_called_model, these_deltas, observed_dirichlets = calling_model("sim_acne.csv", "initial_constants.json")
+    st.session_state.these_deltas = these_deltas
 
     these_inferred_latent_states = list(this_called_model[0].values())
     clustered_states, these_clusters = compute_cluster_dirichlets(these_inferred_latent_states, observed_dirichlets)
@@ -262,11 +280,21 @@ def main():
                                                            dirichlets=clustered_states)
         all_severity_series.append(computed_severity_series)
 
+    col1, col2 = st.columns([20, 1])
 
-    fig, ax = plt.subplots()
+    with col1:
+        fig, ax = plt.subplots(figsize=(20, 8))
+        plotted_trajectories = plot_severity_series(ax, fig, all_severity_series, st.session_state.these_deltas,
+                                                    window_size=st.session_state.window_size, confidence_level=.95)
+        st.write(all_severity_series) #testing
+        st.pyplot(fig)
 
-    plotted_trajectories = plot_severity_series(ax, fig, all_severity_series, confidence_level=.95)
-    st.pyplot(fig)
+    with col2:
+        st.write(".")
+
+
+
+    #st.pyplot(fig, width = "stretch")
 
 if __name__ == "__main__":
     main()

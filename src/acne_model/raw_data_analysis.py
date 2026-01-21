@@ -6,7 +6,7 @@ import scipy as sp
 from scipy import optimize
 import numpy as np
 from collections import defaultdict, Counter
-from scipy.stats import dirichlet
+from scipy.stats import dirichlet, gamma
 
 def seperate_patients(raw_data):
     """Function that separates the raw dataframe via the following:
@@ -176,7 +176,7 @@ def assign_states_to_mdfs(metadata_DFs, state_names, orig_state_ranges):
 def build_histograms(metadata_DFs):
     """This algorithm iterates over all patients' severity dataframes and, for each...
 
-    1) Counts all of the occcurences of each acne severity state throughout all patients, and assigns those counts
+    1) Counts all occcurences of each acne severity state throughout all patients, and assigns those counts
     as a value to the treatment history key in the state counts dictionary.
     2) Normalizes the counts into distributions before returning both.
     """
@@ -206,7 +206,7 @@ def build_histograms(metadata_DFs):
 
     return (all_state_counts, first_order_probabilities)
 
-def build_Dirichlet(prior, all_transition_counts):
+def build_Dirichlet(prior, all_state_counts):
     """This function does the following:
     Accepts a prior in order to construct a Bayesian model of each history's distribution as a Dirichlet distribution with a multinomial
     likelihood. It does so by the following methods.
@@ -218,7 +218,7 @@ def build_Dirichlet(prior, all_transition_counts):
 
     history_and_posteriors = {}
 
-    for history, count_dict in all_transition_counts.items():
+    for history, count_dict in all_state_counts.items():
         counts = [count_dict.get(cat, 0) for cat in categories]  # pulling counts from prior dict and counts dict
         prior = [prior_dict[cat] for cat in categories]
 
@@ -228,6 +228,63 @@ def build_Dirichlet(prior, all_transition_counts):
         history_and_posteriors[history] = posterior_params
 
     return history_and_posteriors, categories
+
+def build_transition_kernel(dirichlet):
+    """Function to estimate the transition matrices for all time steps in the empirical trajectory.
+     Uses one dirichlet prior per row to sample an initial transition matrix, then propagate it forward with
+     all state counts at each time step. Row i refers to initial state i and column j refers to final state j,
+     j, i = 3. They are in order of Low, Medium, and High Change as defined above. Handles either initial (prior) or empirical Dirichlets."""
+    #sample randomly from the initial_distribution to build initial kernel
+    n_transitions = 50
+    bin_names = ['Low Severity', 'Medium Severity', 'High Severity']
+    kernel_list = []
+    samples = {'Low Severity': 0, 'Medium Severity': 0, 'High Severity': 0}
+
+
+    if isinstance(dirichlet, dict): #for initial distribution with prior
+        for initial_state, row_prior in dirichlet.items():
+            for iteration in range(n_transitions):
+                draws = []
+                for alpha in row_prior:
+                    draw = np.random.gamma(alpha, 1, size = 1)[0]
+                    draws.append(draw)
+                total_sum = sum(draws)
+                normalized_draws = [(one_draw / total_sum) for one_draw in draws]
+                for index, (category, cumulative_prob) in enumerate(samples.items()):
+                    samples[category] += normalized_draws[index]
+            kernel_list.append(np.array([this_cumulative_prob/n_transitions for this_cumulative_prob in samples.values()]))
+
+        initial_kernel = np.vstack(tuple(kernel_list))
+
+    else: #for all others
+        for iteration in range(n_transitions):
+            draws = []
+            for alpha in dirichlet:
+                draw = np.random.gamma(alpha, 1, size=1)[0]
+                draws.append(draw)
+            total_sum = sum(draws)
+            normalized_draws = [(one_draw / total_sum) for one_draw in draws]
+            for index, (category, cumulative_prob) in enumerate(samples.items()):
+                samples[category] += normalized_draws[index]
+        kernel_list.append(
+                np.array([this_cumulative_prob / n_transitions for this_cumulative_prob in samples.values()]))
+
+        initial_kernel = np.vstack(tuple(kernel_list))
+
+    return initial_kernel
+
+def build_transition_kernels(dirichlet_prior, dirichlets):
+    """Builds the full series of transition kernels for all empirical dirichlets, given a prior to find the first."""
+    all_matrices = []
+    initial_kernel = build_transition_kernel(dirichlet=dirichlet_prior)
+    all_matrices.append(initial_kernel)
+    actual_dirichlets = list(dirichlets.values())
+
+    for emp_dir in actual_dirichlets:
+        next_kernel = build_transition_kernel(emp_dir)
+        all_matrices.append(next_kernel)
+
+    return all_matrices
 
 def data_parsing(data_filename):
     """Function that does the data parsing, given a csv filename in the same directory."""
@@ -240,7 +297,12 @@ def data_parsing(data_filename):
     these_assigned_md_DFs, these_state_averages = assign_states_to_mdfs(this_md_DFs, these_states, these_ranges)
 
     built_histograms, raw_probabilities = build_histograms(these_assigned_md_DFs)
-    uninformative_prior = [1, 1, 1]  # with a1 corresponding to low severity, a2 corresponding to medium, and a3 corresponding to high
+    uninformative_prior = [4, 3, 1]  # with a1 corresponding to low severity, a2 corresponding to medium, and a3 corresponding to high
+    state_uninformative_prior = {"Low Severity": uninformative_prior, "Medium Severity": uninformative_prior, "High Severity": uninformative_prior}
+    initial_distribution = np.array([0.5, 0.4, 0.1]) #in order of low severity change, medium, high
+
 
     these_Dirichlets, these_categories = build_Dirichlet(uninformative_prior, built_histograms)
-    return this_treatment_history, these_assigned_md_DFs, these_states, these_ranges, this_md_DFs, these_state_averages, these_Dirichlets
+    built_transition_kernels = build_transition_kernels(dirichlet_prior=state_uninformative_prior, dirichlets=these_Dirichlets)
+
+    return this_treatment_history, these_assigned_md_DFs, these_states, these_ranges, this_md_DFs, these_state_averages, these_Dirichlets, built_transition_kernels
