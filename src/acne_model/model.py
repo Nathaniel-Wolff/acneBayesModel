@@ -226,7 +226,7 @@ def compute_log_likelihood(raw_distributions, pred_state_vectors, scoring_params
 
     for i, (history, raw_distribution) in enumerate(raw_distributions.items()):
         predicted_vector_this_history = pred_state_vectors[history]
-        predicted_probs = map_latent_states_to_severity_probs(predicted_vector_this_history, scoring_params)
+        predicted_probs = map_latent_states_to_probs(predicted_vector_this_history, scoring_params)
 
         # avoid log(0)
         predicted_probs = np.clip(predicted_probs, 1e-10, 1.0)
@@ -253,12 +253,36 @@ def compute_log_likelihood(raw_distributions, pred_state_vectors, scoring_params
 
     return total_log_l
 
+
+def compute_log_likelihood_trans_matrix(empirical_counts, empirical_transition_matrices, latent_states, scoring_hyperparams, which_row = 0):
+        """
+        Computes log-likelihood for one transition-matrix row i
+        under a multinomial model with log-offset.
+        """
+
+        W = scoring_hyperparams["scoring"]
+        b = scoring_hyperparams["biases"]
+        total_ll = 0.0
+
+        for empirical_trans_matrix, empirical_counts_matrix, latent_state in zip(empirical_transition_matrices, empirical_counts, latent_states):
+            log_empirical_row = np.log(empirical_trans_matrix[which_row])
+            empirical_counts = empirical_counts_matrix[which_row]
+
+            for c_t, z_t in zip(empirical_counts, latent_states):
+                logits = log_empirical_row + W @ z_t + b
+                logits -= np.max(logits)  # for numerical stability
+                p_t = np.exp(logits)
+                p_t /= np.sum(p_t)
+                total_ll += np.sum(c_t * np.log(p_t + 1e-12))
+
+        return total_ll
+
 def softmax(score):
     """Standalone softmax function."""
     exp_score = np.exp(score - np.max(score))
     return exp_score / np.sum(exp_score)
 
-def map_latent_states_to_severity_probs(latent_state, scoring_hyperparameters):
+def map_latent_states_to_probs(latent_state, scoring_hyperparameters):
     """Function used in the expectation step. It maps a latent state to a distribution over the 3 discrete acne severity change states.
     The distribution is produced with a weighted sum (score) of how coupled each severity state is to each of the components of the latent state.
     Softmaxing converts scores into probabilities."""
@@ -354,7 +378,7 @@ def optimize_hyperparameters(raw_distributions, predicted_states, scoring_hyperp
         for history, raw_alphas in raw_distributions.items():
             v_h = predicted_latent_states[history]
 
-            P = map_latent_states_to_severity_probs(v_h, parameters)  # softmax probs
+            P = map_latent_states_to_probs(v_h, parameters)  # softmax probs
             distribution_alphas = np.array(raw_alphas)
             empirical_probs = distribution_alphas / np.sum(distribution_alphas)
             grad_W += np.outer(empirical_probs - P, v_h)
@@ -376,6 +400,49 @@ def optimize_hyperparameters(raw_distributions, predicted_states, scoring_hyperp
         lls.append(ll)
 
     return scoring_hyperparams, lls
+
+def optimize_hyperparameters_transmatrix_row(transition_kernels, predicted_states, model_params, severity_deltas, which_row, empirical_counts, scoring_hyperparams = {},
+                             learning_rate=1e-5, maximum_steps=30, clip_value=5.0):
+    """Function that implements gradient ascent to maximize the log-likelihood of the model's hyperparameters
+    used for transitions."""
+    lls = []  # log likelihoods
+
+    #ensuring float arrays
+    # ----- here, scoring_hyperparams are initialized to be 0, and are moved here
+    scoring_hyperparams["scoring"] = np.zeroes((3,3), dtype=float)
+    scoring_hyperparams["biases"] = np.zeroes((3,1), dtype=float)
+
+    def compute_gradient_transmatrix(transition_kernels, predicted_latent_states, parameters, which_row):
+        """Inner function for computing gradient of log-likelihood function with respect to scoring weights and biases."""
+        grad_W_transition = np.array(scoring_hyperparams["scoring"], dtype=float)
+        grad_b_transition = np.array(scoring_hyperparams["biases"], dtype=float)
+
+        for time_index in range(1, len(transition_kernels)):
+            v_h = list(predicted_latent_states.values())[time_index] #predicted latent state
+            current_kernel_row = transition_kernels[time_index][which_row] #actual row from empirical data
+
+            predicted_probs = map_latent_states_to_probs(v_h, parameters)  #softmax output of Gi
+            empirical_probs = current_kernel_row
+            grad_W_transition += np.outer(empirical_probs - predicted_probs, v_h)
+            grad_b_transition += (empirical_probs - predicted_probs)
+
+        # clipping gradients to prevent issues
+        grad_W_transition = np.clip(grad_W_transition, -clip_value, clip_value)
+        grad_b_transition = np.clip(grad_b_transition, -clip_value, clip_value)
+
+        return {"scoring": grad_W_transition, "biases": grad_b_transition}
+
+    # actual execution
+    for iteration in range(maximum_steps):
+        gradients = compute_gradient_transmatrix(transition_kernels, predicted_states, scoring_hyperparams, which_row)
+        scoring_hyperparams["scoring"] += (float(learning_rate) * gradients["scoring"])
+        scoring_hyperparams["biases"] += (float(learning_rate) * gradients["biases"])
+        ll = compute_log_likelihood_trans_matrix(empirical_counts, transition_kernels, predicted_states, scoring_hyperparams)
+        lls.append(ll)
+
+    return scoring_hyperparams, lls
+
+
 def optimize_process_and_measurement_covariances(pred_state_vectors, model_params, scoring_hyperparams, raw_distributions, severity_deltas):
     """
     Optimize the process (Q) and measurement (R) noise covariances.
@@ -390,8 +457,7 @@ def optimize_process_and_measurement_covariances(pred_state_vectors, model_param
     state_evolution_fn = partial(
         smm_model,
         params=model_params,
-        raw_distributions=raw_distributions
-    )
+        raw_distributions=raw_distributions)
 
     # ---- Process covariance Q ----
     q_residuals = []
@@ -408,7 +474,7 @@ def optimize_process_and_measurement_covariances(pred_state_vectors, model_param
     for history_index, (history, v_t) in enumerate(pred_state_vectors.items()):
         y_obs = np.array(raw_distributions[history])
         y_obs = y_obs / np.sum(y_obs)  # normalize to probabilities
-        y_pred = map_latent_states_to_severity_probs(v_t, scoring_hyperparams)
+        y_pred = map_latent_states_to_probs(v_t, scoring_hyperparams)
         r_residuals.append(y_obs - y_pred)
 
     r_residuals = np.stack(r_residuals)
@@ -441,8 +507,7 @@ def full_maximimzation_step(pred_state_vectors,raw_distributions,parameters,mode
         model_params=model_params,
         severity_deltas=severity_deltas,
         learning_rate=learning_rate,
-        maximum_steps=max_grad_steps
-    )
+        maximum_steps=max_grad_steps)
 
     parameters["scoring"] = scoring_params["scoring"]
     parameters["biases"] = scoring_params["biases"]

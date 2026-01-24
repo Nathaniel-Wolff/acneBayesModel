@@ -7,7 +7,7 @@ from acne_model import data_parsing, model_building
 from scipy.stats import beta
 from acne_model.model import state_evolution_vv as evolution_function
 from acne_model.model import reparameterize
-from acne_model.model import map_latent_states_to_severity_probs as severity_distribution_function
+from acne_model.model import map_latent_states_to_probs as severity_distribution_function
 from acne_model.model import compute_cluster_dirichlets, assign_label
 from collections import defaultdict
 
@@ -17,9 +17,12 @@ st.set_page_config(layout="wide")
 #calling the model with test dataset
 def calling_model(this_raw_data_name, json_name):
     data_returns = data_parsing(this_raw_data_name)
+
     these_ranges = data_returns[3]
     these_averages = data_returns[5]
     these_dirichlets = data_returns[6]
+    these_kernels = data_returns[7]
+
 
     with open(json_name, "r") as icgs:
         initial_constant_guesses = json.load(icgs)
@@ -98,6 +101,66 @@ def compute_severity_series(fitted_model_params, severity_deltas, scoring_hyperp
     return dirs_and_expectations, histories
 
 
+
+def compute_trajectory_prob(trajectory, transition_matrices):
+    last_pr = trajectory[1] #trajectory is in the form ([S1, S2...Sn], Pr(Trajectory))
+    for i, states in enumerate(trajectory[0][1:]):
+        previous_state = states[i-1] #should evaluate to int
+        current_state = states[i] #should evaluate to int
+        current_transition_matrix = transition_matrices[i]
+        current_transition_prob = current_transition_matrix[current_state][previous_state]
+        last_pr *= current_transition_prob
+    return last_pr
+
+def extend_and_prune_trajectories(actual_trajectories, the_transition_matrices, the_top_log_pr, the_max_trajectories, initial_distribution):
+    #1 for low change, 2 for medium change, 3 for high change
+    if len(actual_trajectories) != 0:
+        #------ extension
+        for trajectory in actual_trajectories: #trajectory is in the form ([S1, S2...Sn], Pr(Trajectory))
+            trajectory[0].append(1)
+        for trajectory in actual_trajectories:
+            trajectory[0].append(2)
+        for trajectory in actual_trajectories:
+            trajectory[0].append(3)
+        #------ probability calculation and pruning
+        updated_trajectories = []
+        for appended_trajectory in actual_trajectories:
+            new_computed_prob_log = np.log(compute_trajectory_prob(appended_trajectory, the_transition_matrices))
+            updated_trajectories.append(appended_trajectory[0], new_computed_prob_log)
+            #mental note: Order the trajectories in terms of new probabilities, then cut off
+            #most of them, and move them forward, You'll have to output the updated trajectories
+            #instead of the actual ones. Check if sets will screw this up bc of mutatability.
+        #sorting trajectories by probability
+        updated_trajectories.sort(key = lambda prob: prob[1])
+        datatype = np.dtype([("traj", list), ("logprob", float)]) #datatype for these arrays
+        structured_trajectory_array = np.array(updated_trajectories, dtype = datatype)
+        mask = structured_trajectory_array["logprob"] >= the_top_log_pr
+        masked_traj_array = np.ma.masked_where(mask, structured_trajectory_array)
+
+        print(masked_traj_array)
+        array_as_list = list(masked_traj_array)
+        return array_as_list
+
+    else:
+        #using set to avoid any potential duplication
+        actual_trajectories = {([m], initial_distribution[m]) for m in range(3)} #initialize probabilities from initial distribution
+
+
+    return actual_trajectories
+
+def branch_and_bound_trajectories(transition_matrices, initial_distribution, trajectories = [], top_k = 3, max_trajectories = 35):
+    """Recursive implementation of the branch and bound algorithm for beam scoring of potential trajectories."""
+    if len(trajectories) != max_trajectories:
+        branch_and_bound_trajectories(transition_matrices  = transition_matrices, trajectories = extend_and_prune_trajectories(trajectories, transition_matrices, top_k, max_trajectories),
+                                      top_k = top_k, max_trajectories = max_trajectories)
+    else:
+        return trajectories
+
+
+
+
+
+
 def plot_severity_series(plot, axis, trajectories_dirichlets, severity_deltas, window_size = 20, confidence_level = .95, width = 1):
     """Function to plot Dirichlet credible intervals over a plot."""
     colors = ["tab:green", "tab:gray", "tab:red"]
@@ -169,7 +232,6 @@ def commit_trajectory():
         list(st.session_state.draft_trajectory)
     )
     st.session_state.draft_trajectory.clear()
-
     # reset sliders
     st.session_state.draft_antibiotics = 0
     st.session_state.draft_retinol = 0
@@ -179,6 +241,7 @@ def set_window():
 def main():
     # Clinician Input Sliders
     st.header("Treatment Inputs")
+    these_initial_distributions = np.array([0.5, 0.4, 0.1]) #in order of low severity change, medium, high
 
     # initialization
     if "trajectories" not in st.session_state:
@@ -222,7 +285,6 @@ def main():
 
     if "initial_severity" not in st.session_state:
         st.session_state.initial_severity = 1.0
-
 
     col1, col2 = st.columns(2)
     with col1:

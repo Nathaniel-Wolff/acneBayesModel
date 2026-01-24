@@ -7,6 +7,7 @@ from scipy import optimize
 import numpy as np
 from collections import defaultdict, Counter
 from scipy.stats import dirichlet, gamma
+import itertools
 
 def seperate_patients(raw_data):
     """Function that separates the raw dataframe via the following:
@@ -51,8 +52,6 @@ def add_history_metadata(seperatePatientsDFs, allPatientsIntroDays):
     1) Loading each seperate patient's dataframe and compute the average baseline severity, normalizing acne severity scores. Then modifies the dataframe, called a severities dataframe.
     2) For each, mapping each value for treatment to the a treatment history tuple. It is a tuple of the form ((days of treatment, ai), (days of treatment, ai+1),....(days of treatment, an))
     where n is the row number of the current day of the particular treatment."""
-    
-    
     #initializing dict containing severties by day for a given treatment 
     severitiesDayTreatmentDict = {treatment: None for treatment in seperatePatientsDFs[0]["treatment"]}
     modifiedDFs = []
@@ -180,7 +179,6 @@ def build_histograms(metadata_DFs):
     as a value to the treatment history key in the state counts dictionary.
     2) Normalizes the counts into distributions before returning both.
     """
-
     all_state_counts = defaultdict(Counter)
 
     for i, patient_df in enumerate(metadata_DFs):
@@ -205,6 +203,33 @@ def build_histograms(metadata_DFs):
         first_order_probabilities[previous_treatment] = probabilities_given_previous_state
 
     return (all_state_counts, first_order_probabilities)
+
+def build_empirical_transition_counts(metadata_DFs, moderate_prior = 5):
+    """This algorithm constructs empirical transition counts to a 1st Order Markov approximation.
+    Transitions are indexed with a tuple containing (Initial State, Final State).
+    Doesn't require all metadata dfs are the same length.
+    Currently uses a moderate, uniform prior that will be changed later."""
+    state_names = ['Low Severity', 'Medium Severity', 'High Severity']
+    all_keys = list(itertools.product(state_names, repeat = 2))
+    one_day_dict = {perm: moderate_prior for perm in all_keys}
+    transition_counts = defaultdict(lambda: one_day_dict.copy())
+    proper_distributions = {}
+
+    for metadata_df in metadata_DFs:
+        all_states = metadata_df["State"].values
+        for day_index in range(1, len(metadata_df)-1):
+            previous_state = all_states[day_index-1]
+            current_state = all_states[day_index]
+            transition = (previous_state, current_state)
+            transition_counts[day_index][transition] += 1
+    #normalizing into distributions
+    for day, inner_dict in transition_counts.items():
+        new_inner = defaultdict(lambda: one_day_dict.copy())
+        for inner_key, inner_count in inner_dict.items():
+            new_inner[inner_key] = inner_count/sum(inner_dict.values())
+        proper_distributions[day] = new_inner
+
+    return proper_distributions
 
 def build_Dirichlet(prior, all_state_counts):
     """This function does the following:
@@ -252,7 +277,7 @@ def build_transition_kernel(dirichlet):
                 normalized_draws = [(one_draw / total_sum) for one_draw in draws]
                 for index, (category, cumulative_prob) in enumerate(samples.items()):
                     samples[category] += normalized_draws[index]
-            kernel_list.append(np.array([this_cumulative_prob/n_transitions for this_cumulative_prob in samples.values()]))
+                kernel_list.append(np.array([this_cumulative_prob/n_transitions for this_cumulative_prob in samples.values()]))
 
         initial_kernel = np.vstack(tuple(kernel_list))
 
@@ -266,8 +291,10 @@ def build_transition_kernel(dirichlet):
             normalized_draws = [(one_draw / total_sum) for one_draw in draws]
             for index, (category, cumulative_prob) in enumerate(samples.items()):
                 samples[category] += normalized_draws[index]
-        kernel_list.append(
-                np.array([this_cumulative_prob / n_transitions for this_cumulative_prob in samples.values()]))
+            kernel_list.append(np.array([this_cumulative_prob / n_transitions for this_cumulative_prob in samples.values()]))
+
+        initial_kernel = np.vstack(tuple(kernel_list))
+
 
         initial_kernel = np.vstack(tuple(kernel_list))
 
@@ -298,6 +325,8 @@ def data_parsing(data_filename):
 
     built_histograms, raw_probabilities = build_histograms(these_assigned_md_DFs)
     uninformative_prior = [4, 3, 1]  # with a1 corresponding to low severity, a2 corresponding to medium, and a3 corresponding to high
+    built_transition_dict = build_empirical_transition_counts(these_assigned_md_DFs)
+
     state_uninformative_prior = {"Low Severity": uninformative_prior, "Medium Severity": uninformative_prior, "High Severity": uninformative_prior}
     initial_distribution = np.array([0.5, 0.4, 0.1]) #in order of low severity change, medium, high
 
