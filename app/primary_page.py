@@ -18,25 +18,38 @@ st.set_page_config(layout="wide")
 def calling_model(this_raw_data_name, json_name):
     data_returns = data_parsing(this_raw_data_name)
 
-    these_ranges = data_returns[3]
+    #these_ranges = data_returns[3]
     these_averages = data_returns[5]
     these_dirichlets = data_returns[6]
-    these_kernels = data_returns[7]
+    these_empirical_trans_matrices = data_returns[7]
+    transition_counts = data_returns[8]
+
+    st.write("empirical matrices", these_empirical_trans_matrices)
+
 
 
     with open(json_name, "r") as icgs:
         initial_constant_guesses = json.load(icgs)
+        #change config later
         this_model_config = {"scoring": np.random.randn(3, 3) * 0.02,
                              # column order: low severity change, medium, high. row order: #bacteria, inflammation, sebum.
                              "biases": [0, 0, 0],
+                             "scoring_trans_row 0": [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+                             "biases_trans_row 0": [0, 0, 0],
+                             "scoring_trans_row 1": [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+                             "biases_trans_row 1": [0, 0, 0],
+                             "scoring_trans_row 2": [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+                             "biases_trans_row 2": [0, 0, 0],
                              "Q": np.eye(3) * (initial_constant_guesses["w_sigma"] ** 2),
                              "R": np.eye(3) * (initial_constant_guesses["m_sigma"] ** 2)}
 
+
     #reparameterization and the reverse are both done in the function itself now
-    this_built_model = model_building(data_returns[1], initial_constant_guesses, these_dirichlets, these_averages,
-                                      this_model_config)
-    st.write(this_built_model[1])
-    return this_built_model, these_averages, these_dirichlets
+    this_built_model = model_building(these_empirical_counts=transition_counts, these_empirical_kernels=these_empirical_trans_matrices, these_initial_params=initial_constant_guesses, raw_distributions=these_dirichlets,
+                                      severity_deltas=these_averages,
+                                      model_config=this_model_config)
+    st.write(this_built_model)
+    return this_built_model, these_averages, these_dirichlets, these_empirical_trans_matrices, transition_counts
 def build_trajectory(**kwargs):
     """Function to create a new treatment trajectory given the everpresent widgets above."""
     #parse out treatment ends into full history
@@ -137,7 +150,6 @@ def extend_and_prune_trajectories(actual_trajectories, the_transition_matrices, 
         mask = structured_trajectory_array["logprob"] >= the_top_log_pr
         masked_traj_array = np.ma.masked_where(mask, structured_trajectory_array)
 
-        print(masked_traj_array)
         array_as_list = list(masked_traj_array)
         return array_as_list
 
@@ -157,11 +169,7 @@ def branch_and_bound_trajectories(transition_matrices, initial_distribution, tra
         return trajectories
 
 
-
-
-
-
-def plot_severity_series(plot, axis, trajectories_dirichlets, severity_deltas, window_size = 20, confidence_level = .95, width = 1):
+def plot_severity_series(plot, trajectories_dirichlets, severity_deltas, window_size = 20, confidence_level = .95, width = 1):
     """Function to plot Dirichlet credible intervals over a plot."""
     colors = ["tab:green", "tab:gray", "tab:red"]
     labels = ["High Decrease", "Medium Decrease", "Low Decrease"]
@@ -265,6 +273,13 @@ def main():
     if "these_deltas" not in st.session_state:
         st.session_state.these_deltas = {}
 
+    if "empirical_matrices" not in st.session_state:
+        st.session_state.empirical_matrices = []
+
+    if "empirical_counts" not in st.session_state:
+        st.session_state.empirical_counts = []
+
+
     if st.session_state.get("_reset_sliders", False):
         st.session_state.draft_antibiotics = 0
         st.session_state.draft_retinol = 0
@@ -328,8 +343,10 @@ def main():
 
     build_trajectory()
 
-    this_called_model, these_deltas, observed_dirichlets = calling_model("sim_acne.csv", "initial_constants.json")
+    this_called_model, these_deltas, observed_dirichlets, ob_empirical_matrices, ob_raw_counts = calling_model("sim_acne.csv", "initial_constants.json")
     st.session_state.these_deltas = these_deltas
+    st.session_state.empirical_matrices = ob_empirical_matrices
+    st.session_state.raw_counts = ob_raw_counts
 
     these_inferred_latent_states = list(this_called_model[0].values())
     clustered_states, these_clusters = compute_cluster_dirichlets(these_inferred_latent_states, observed_dirichlets)

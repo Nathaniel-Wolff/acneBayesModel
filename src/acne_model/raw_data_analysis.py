@@ -208,28 +208,43 @@ def build_empirical_transition_counts(metadata_DFs, moderate_prior = 5):
     """This algorithm constructs empirical transition counts to a 1st Order Markov approximation.
     Transitions are indexed with a tuple containing (Initial State, Final State).
     Doesn't require all metadata dfs are the same length.
-    Currently uses a moderate, uniform prior that will be changed later."""
+    Curently uses a moderate, uniform prior that will be changed later."""
     state_names = ['Low Severity', 'Medium Severity', 'High Severity']
-    all_keys = list(itertools.product(state_names, repeat = 2))
+    all_keys = [str(each) for each in itertools.product(state_names, repeat = 2)] #converting to string for json serialization
     one_day_dict = {perm: moderate_prior for perm in all_keys}
     transition_counts = defaultdict(lambda: one_day_dict.copy())
+    proper_counts_matrices = {}
     proper_distributions = {}
+    proper_distributions_matrices = {}
 
     for metadata_df in metadata_DFs:
         all_states = metadata_df["State"].values
         for day_index in range(1, len(metadata_df)-1):
             previous_state = all_states[day_index-1]
             current_state = all_states[day_index]
-            transition = (previous_state, current_state)
+            transition = str((previous_state, current_state)) #fixing for string conversion above
             transition_counts[day_index][transition] += 1
+
+    #converting back to matrices
+    for day, inner_dict in transition_counts.items():
+        fixed_counts_matrix = np.array(list(inner_dict.values())).reshape(len(state_names), len(state_names)) #later can be refactored for more than 3 states
+        proper_counts_matrices[day] = fixed_counts_matrix
+
     #normalizing into distributions
     for day, inner_dict in transition_counts.items():
         new_inner = defaultdict(lambda: one_day_dict.copy())
         for inner_key, inner_count in inner_dict.items():
+            # need to fix this parsing. Everything is going into a single dictionary instead of 3
             new_inner[inner_key] = inner_count/sum(inner_dict.values())
         proper_distributions[day] = new_inner
 
-    return proper_distributions
+    for day, pr_inner_dict in proper_distributions.items():
+        fixed_probs_matrix = np.array(list(pr_inner_dict.values())).reshape(len(state_names),
+                                                                          len(state_names))  # later can be refactored for more than 3 states
+        proper_distributions_matrices[day] = fixed_probs_matrix
+
+
+    return proper_distributions_matrices, proper_counts_matrices
 
 def build_Dirichlet(prior, all_state_counts):
     """This function does the following:
@@ -325,13 +340,12 @@ def data_parsing(data_filename):
 
     built_histograms, raw_probabilities = build_histograms(these_assigned_md_DFs)
     uninformative_prior = [4, 3, 1]  # with a1 corresponding to low severity, a2 corresponding to medium, and a3 corresponding to high
-    built_transition_dict = build_empirical_transition_counts(these_assigned_md_DFs)
+    built_transition_dict, transition_counts = build_empirical_transition_counts(these_assigned_md_DFs)
 
     state_uninformative_prior = {"Low Severity": uninformative_prior, "Medium Severity": uninformative_prior, "High Severity": uninformative_prior}
     initial_distribution = np.array([0.5, 0.4, 0.1]) #in order of low severity change, medium, high
 
 
     these_Dirichlets, these_categories = build_Dirichlet(uninformative_prior, built_histograms)
-    built_transition_kernels = build_transition_kernels(dirichlet_prior=state_uninformative_prior, dirichlets=these_Dirichlets)
-
-    return this_treatment_history, these_assigned_md_DFs, these_states, these_ranges, this_md_DFs, these_state_averages, these_Dirichlets, built_transition_kernels
+    
+    return this_treatment_history, these_assigned_md_DFs, these_states, these_ranges, this_md_DFs, these_state_averages, these_Dirichlets, built_transition_dict, transition_counts

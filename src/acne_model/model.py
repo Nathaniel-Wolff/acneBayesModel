@@ -3,20 +3,18 @@
 
 import pandas as pd
 import numpy as np
-from collections import defaultdict, Counter
+from collections import defaultdict
 import statsmodels.api as sm
 from scipy.stats import dirichlet
 from scipy.spatial import distance_matrix
-from scipy.stats import beta
 from sklearn.cluster import KMeans
 from functools import partial
-from scipy.spatial.distance import cdist
 
 def fit_predictive_linear_regression_model_of_severity(metadata_dfs):
     """Function to fit a predictive linear model of acne severity as a function of:
     1) Lagged/previous day's severity; 2/3) Cumulative days of the current treatment (in this case, either antibiotics or cream)
     4) Synergistic effect of cream being followed by a certain number of days of antibiotics.
-    5) Saturation function based on the Michaelis-Menten half saturation constant (particuarly as cream eventually causes the molecular system
+    5) Saturation function based on the Michaelis-Menten half saturation constant (particularly as cream eventually causes the molecular system
     of skin cells to approach homeostasis, with its effect progressively leveling off."""
 
     day_and_sev = defaultdict(list)
@@ -63,7 +61,6 @@ def fit_predictive_linear_regression_model_of_severity(metadata_dfs):
     # saving the independent variable values per history to a dataframe for easier fitting to the multivariate regression model
     rows = []
     for history, entries in day_and_sev.items():
-        # print(entries)
         for features, previous_sev, curr_sev in entries:
             delta = curr_sev - previous_sev
             row = features.copy()
@@ -79,7 +76,6 @@ def fit_predictive_linear_regression_model_of_severity(metadata_dfs):
     severity_change = dataframe_for_fitting["delta_severity"]
 
     fitted_model = sm.OLS(severity_change, history_vectors_of_independent_vars).fit()
-    # print(fitted_model.summary())
 
 def reparameterize(model_params):
     """Used to reparameterize most existing model parameters to improve identifiability."""
@@ -173,8 +169,6 @@ def state_evolution_vv(v_t_last, params, history, raw_distribution, severity_del
     cur_sebum = np.clip(cur_sebum, 0, 10)
 
     return np.array([cur_bac, cur_inf, cur_sebum]), tstd_term, days_antib, was_cream_used
-
-
 def log_prior_reparam(params, priors={
     # timescale (positive, log-normal)
     "t": (0.0, 0.5),
@@ -255,37 +249,34 @@ def compute_log_likelihood(raw_distributions, pred_state_vectors, scoring_params
 
 
 def compute_log_likelihood_trans_matrix(empirical_counts, empirical_transition_matrices, latent_states, scoring_hyperparams, which_row = 0):
-        """
-        Computes log-likelihood for one transition-matrix row i
-        under a multinomial model with log-offset.
-        """
+    """Computes log-likelihood for one transition-matrix row i under a multinomial model with log-offset."""
+    W = scoring_hyperparams["scoring"]
+    b = scoring_hyperparams["biases"]
+    total_ll = 0.0
 
-        W = scoring_hyperparams["scoring"]
-        b = scoring_hyperparams["biases"]
-        total_ll = 0.0
+    for P_hat, C, z in zip(list(empirical_transition_matrices.values()), list(empirical_counts.values()), list(latent_states.values())):
+        log_offset = np.log(P_hat[which_row] + 1e-12)
+        counts = C[which_row]
 
-        for empirical_trans_matrix, empirical_counts_matrix, latent_state in zip(empirical_transition_matrices, empirical_counts, latent_states):
-            log_empirical_row = np.log(empirical_trans_matrix[which_row])
-            empirical_counts = empirical_counts_matrix[which_row]
+        logits = log_offset + W @ z + b
+        logits -= np.max(logits)
+        p = np.exp(logits)
+        p /= np.sum(p)
 
-            for c_t, z_t in zip(empirical_counts, latent_states):
-                logits = log_empirical_row + W @ z_t + b
-                logits -= np.max(logits)  # for numerical stability
-                p_t = np.exp(logits)
-                p_t /= np.sum(p_t)
-                total_ll += np.sum(c_t * np.log(p_t + 1e-12))
+        total_ll += np.sum(counts * np.log(p + 1e-12))
 
-        return total_ll
+    return total_ll
 
 def softmax(score):
     """Standalone softmax function."""
     exp_score = np.exp(score - np.max(score))
     return exp_score / np.sum(exp_score)
 
-def map_latent_states_to_probs(latent_state, scoring_hyperparameters):
+def map_latent_states_to_probs(latent_state, scoring_hyperparameters, additional_term = 0):
     """Function used in the expectation step. It maps a latent state to a distribution over the 3 discrete acne severity change states.
     The distribution is produced with a weighted sum (score) of how coupled each severity state is to each of the components of the latent state.
-    Softmaxing converts scores into probabilities."""
+    Softmaxing converts scores into probabilities.
+    Contains additional term option for log-offset (used in transition matrix gradient descent)."""
 
     def softmax(x):
         # subtract max for numerical stability
@@ -300,7 +291,7 @@ def map_latent_states_to_probs(latent_state, scoring_hyperparameters):
     #latent_norm = latent_state / (np.linalg.norm(latent_state) + 1e-6)
 
     # Linear scoring
-    score = W @ latent_state + b
+    score = W @ latent_state + b + additional_term
 
     # Clip scores before softmax
     score = np.clip(score, -10, 10)
@@ -400,48 +391,56 @@ def optimize_hyperparameters(raw_distributions, predicted_states, scoring_hyperp
         lls.append(ll)
 
     return scoring_hyperparams, lls
-
-def optimize_hyperparameters_transmatrix_row(transition_kernels, predicted_states, model_params, severity_deltas, which_row, empirical_counts, scoring_hyperparams = {},
-                             learning_rate=1e-5, maximum_steps=30, clip_value=5.0):
+def optimize_hyperparameters_transmatrix_row(transition_kernels, predicted_states, which_row, empirical_counts, scoring_hyperparams,
+                             learning_rate=float(1e-5), maximum_steps=30, clip_value=5.0):
     """Function that implements gradient ascent to maximize the log-likelihood of the model's hyperparameters
     used for transitions."""
     lls = []  # log likelihoods
 
-    #ensuring float arrays
-    # ----- here, scoring_hyperparams are initialized to be 0, and are moved here
-    scoring_hyperparams["scoring"] = np.zeroes((3,3), dtype=float)
-    scoring_hyperparams["biases"] = np.zeroes((3,1), dtype=float)
+    W_transition_string = "scoring_trans_row {}".format(which_row) #fixed keys
+    b_transition_string = "biases_trans_row {}".format(which_row) #fixed keys
 
-    def compute_gradient_transmatrix(transition_kernels, predicted_latent_states, parameters, which_row):
+    #print("one iteration", transition_kernels)
+
+    def compute_gradient_transmatrix(transition_kernels, predicted_latent_states, which_row, empirical_counts):
         """Inner function for computing gradient of log-likelihood function with respect to scoring weights and biases."""
-        grad_W_transition = np.array(scoring_hyperparams["scoring"], dtype=float)
-        grad_b_transition = np.array(scoring_hyperparams["biases"], dtype=float)
 
-        for time_index in range(1, len(transition_kernels)):
-            v_h = list(predicted_latent_states.values())[time_index] #predicted latent state
-            current_kernel_row = transition_kernels[time_index][which_row] #actual row from empirical data
+        W_transition = np.array(scoring_hyperparams[W_transition_string])
+        b_transition = np.array(scoring_hyperparams[b_transition_string])
 
-            predicted_probs = map_latent_states_to_probs(v_h, parameters)  #softmax output of Gi
-            empirical_probs = current_kernel_row
-            grad_W_transition += np.outer(empirical_probs - predicted_probs, v_h)
-            grad_b_transition += (empirical_probs - predicted_probs)
+        grad_W_transition = np.zeros_like(W_transition).astype('float64')
+        grad_b_transition = np.zeros_like(b_transition).astype('float64')
 
-        # clipping gradients to prevent issues
-        grad_W_transition = np.clip(grad_W_transition, -clip_value, clip_value)
-        grad_b_transition = np.clip(grad_b_transition, -clip_value, clip_value)
 
-        return {"scoring": grad_W_transition, "biases": grad_b_transition}
+        for p_hat, emp_counts, latent_state in zip(list(transition_kernels.values()), list(empirical_counts.values()), predicted_latent_states.values()):
+            log_offset_prob = np.log(p_hat[which_row] + 1e-12).astype(float)
+            actual_counts = emp_counts[which_row].astype(float)
+            N = float(np.sum(actual_counts))
+
+
+            logits = log_offset_prob + W_transition @ latent_state + b_transition
+            logits -= np.max(logits)
+            pred_prob_hat = np.exp(logits)
+            pred_prob_hat/= np.sum(pred_prob_hat) #normalization
+
+
+            slope = actual_counts - N * pred_prob_hat #fix casting problem somehow...something having to do with grad W transition???
+
+            grad_W_transition += np.outer(slope, latent_state)
+            grad_b_transition += slope
+
+        return {W_transition_string: grad_W_transition.astype('float64'), b_transition_string: grad_b_transition.astype('float64')} #fixed keys
 
     # actual execution
     for iteration in range(maximum_steps):
-        gradients = compute_gradient_transmatrix(transition_kernels, predicted_states, scoring_hyperparams, which_row)
-        scoring_hyperparams["scoring"] += (float(learning_rate) * gradients["scoring"])
-        scoring_hyperparams["biases"] += (float(learning_rate) * gradients["biases"])
+        gradients = compute_gradient_transmatrix(transition_kernels, predicted_states, which_row, empirical_counts)
+        #print(scoring_hyperparams[W_transition_string], float(learning_rate) * gradients[W_transition_string].astype('float64'))
+        scoring_hyperparams[W_transition_string] += (learning_rate * gradients[W_transition_string].astype('float64')) #fixed keys
+        scoring_hyperparams[b_transition_string] += (learning_rate * gradients[b_transition_string].astype('float64')) #fixed keys
         ll = compute_log_likelihood_trans_matrix(empirical_counts, transition_kernels, predicted_states, scoring_hyperparams)
         lls.append(ll)
 
     return scoring_hyperparams, lls
-
 
 def optimize_process_and_measurement_covariances(pred_state_vectors, model_params, scoring_hyperparams, raw_distributions, severity_deltas):
     """
@@ -498,7 +497,8 @@ def optimize_a_linear_parameter_set(target_values, input_matrix, mu=0.0, sigma=1
 
     return theta
 
-def full_maximimzation_step(pred_state_vectors,raw_distributions,parameters,model_params,prev_state_vectors,days_antibiotics,cream_useds,severity_deltas,learning_rate=1e-4,max_grad_steps=30):
+def full_maximimzation_step(pred_state_vectors, raw_distributions, parameters, model_params, prev_state_vectors,days_antibiotics,cream_useds,severity_deltas, empirical_counts, empirical_kernels, learning_rate=1e-4,max_grad_steps=30):
+    #need to add optimization of Markov process Kernels
     # 1. Optimize nonlinear scoring weight and bias hyperparameters
     scoring_params, scoring_ll = optimize_hyperparameters(
         raw_distributions=raw_distributions,
@@ -511,6 +511,30 @@ def full_maximimzation_step(pred_state_vectors,raw_distributions,parameters,mode
 
     parameters["scoring"] = scoring_params["scoring"]
     parameters["biases"] = scoring_params["biases"]
+
+    #calling optimization for each row of the matrices
+    #row 1
+    scoring_params_trans_matrices_row_1, trans_scoring_ll_1 = optimize_hyperparameters_transmatrix_row(
+        transition_kernels=empirical_kernels, predicted_states=pred_state_vectors, which_row = 0,
+        empirical_counts=empirical_counts, scoring_hyperparams=parameters)
+
+    scoring_params_trans_matrices_row_2, trans_scoring_ll_2 = optimize_hyperparameters_transmatrix_row(
+        transition_kernels=empirical_kernels, predicted_states=pred_state_vectors, which_row=1,
+        empirical_counts=empirical_counts, scoring_hyperparams=parameters)
+
+    scoring_params_trans_matrices_row_3, trans_scoring_ll_3 = optimize_hyperparameters_transmatrix_row(
+        transition_kernels=empirical_kernels, predicted_states=pred_state_vectors, which_row=2,
+        empirical_counts=empirical_counts, scoring_hyperparams=parameters)
+
+    parameters["scoring_trans_row 0"] = scoring_params_trans_matrices_row_1["scoring_trans_row 0"]
+    parameters["biases_trans_row 0"] = scoring_params_trans_matrices_row_1["biases_trans_row 0"]
+
+    parameters["scoring_trans_row 1"] = scoring_params_trans_matrices_row_2["scoring_trans_row 1"]
+    parameters["biases_trans_row 1"] = scoring_params_trans_matrices_row_2["biases_trans_row 1"]
+
+    parameters["scoring_trans_row 2"] = scoring_params_trans_matrices_row_3["scoring_trans_row 2"]
+    parameters["biases_trans_row 2"] = scoring_params_trans_matrices_row_3["biases_trans_row 2"]
+
 
     # Helper function to safely slice lists to match target length
     def safe_slice(lst, target_len):
@@ -552,7 +576,6 @@ def full_maximimzation_step(pred_state_vectors,raw_distributions,parameters,mode
         safe_slice(cream_useds, len(seb_targets))])
 
     new_r_I_prod_scaled, new_r_cream_clean = optimize_a_linear_parameter_set(seb_targets, seb_inputs)
-
     model_params["r_I_production"] = new_r_I_prod_scaled
     model_params["r_cream_clean"] = new_r_cream_clean
 
@@ -576,22 +599,27 @@ def compute_transition_log_likelihood(v_t, v_t_pred, Q):
     logdetQ = np.log(np.linalg.det(Q))
     return -0.5 * diff.T @ Q_inv @ diff - 0.5 * logdetQ
 
-def fit_latent_state_space_model(metadata_dfs, initial_parameters, raw_distributions, severity_deltas, model_config,
+def fit_latent_state_space_model(empirical_counts, empirical_kernels, initial_parameters, raw_distributions, severity_deltas, model_config,
                                  max_iterations=20):
     """EM Filter fitting for acne latent state space model."""
 
     # --- Initial guesses for latent states and covariances---
     initial_states_guess = np.array([1.0, 1.0, 1.0])  # bacteria, inflammation, sebum
-    # initial_covariance = np.diag([0.01, 0.01, 0.01])  # initial uncertainties
+
 
     # --- Last iteration values ---
     # scoring hyperparams for mapping of latent state to probability distribution
     # updating to now have 3 weights per acne severity change state instead of just vector of probabilities of each state
-    last_state_weights = np.array(model_config["scoring"])
+    updated_state_weights = np.array(model_config["scoring"])
     last_state_biases = np.array(model_config["biases"])
+    last_state_weights_row_0 = np.array(model_config["scoring_trans_row 0"])
+    last_state_biases_row_0 = np.array(model_config["biases_trans_row 0"])
 
-    # last_Q = model_config["Q"]
-    # last_R = np.maximum(model_config["R"], 1e-3 * np.eye(3)) #changed to have a floor
+    last_state_weights_row_1 = np.array(model_config["scoring_trans_row 1"])
+    last_state_biases_row_1 = np.array(model_config["biases_trans_row 1"])
+
+    last_state_weights_row_2 = np.array(model_config["scoring_trans_row 2"])
+    last_state_biases_row_2 = np.array(model_config["biases_trans_row 2"])
 
     last_params = initial_parameters.copy()  # model parameters
 
@@ -602,14 +630,12 @@ def fit_latent_state_space_model(metadata_dfs, initial_parameters, raw_distribut
     # Run smm_model for the first history
     z_first, t_first, days_first, cream_first = smm_model(initial_states_guess, last_params, raw_distributions,
                                                           severity_deltas, 0)
-
     # Store initial predictions
     v_predictions = {first_history: z_first}
 
-    last_state = z_first
     last_predictions = {h: initial_states_guess.copy() for h in histories}
 
-    # ---- EM ----
+    # ---- Full EM ----
     for em_iteration in range(max_iterations):
         t_tstds = []
         days_antibiotics = []
@@ -619,7 +645,6 @@ def fit_latent_state_space_model(metadata_dfs, initial_parameters, raw_distribut
             # -----  Expectation Step
             current_history = histories[history_index]
             # current state's values (treatment day t) are found here
-            # last_predictions[current_history]
             z_current_prediction, predicted_tstd_term, here_days_antib, here_was_cream_used = smm_model(
                 last_predictions[current_history], last_params, raw_distributions, severity_deltas, history_index)
 
@@ -630,40 +655,69 @@ def fit_latent_state_space_model(metadata_dfs, initial_parameters, raw_distribut
             days_antibiotics.append(here_days_antib)
             cream_useds.append(here_was_cream_used)
 
-        # ---- Maximization Step ----
+        # ---- Maximization  ----
         # Create a partial of smm_model for Q/R optimization
 
         updated_parameters, last_params = full_maximimzation_step(
             pred_state_vectors=v_predictions,
             raw_distributions=raw_distributions,
-            parameters={"scoring": last_state_weights, "biases": last_state_biases},
+            parameters={"scoring": updated_state_weights, "biases": last_state_biases,
+                        "scoring_trans_row 0": last_state_weights_row_0, "biases_trans_row 0": last_state_biases_row_0,
+                        "scoring_trans_row 1": last_state_weights_row_1, "biases_trans_row 1": last_state_biases_row_1,
+                        "scoring_trans_row 2": last_state_weights_row_0, "biases_trans_row 2": last_state_biases_row_2},
             model_params=last_params,
             prev_state_vectors=last_predictions,
             days_antibiotics=days_antibiotics,
             cream_useds=cream_useds,
             severity_deltas=severity_deltas,
+            empirical_counts=empirical_counts,
+            empirical_kernels=empirical_kernels,
             learning_rate=1e-3,
             max_grad_steps=30
         )
 
         # now explicitly get the scoring vector
-        last_state_weights = np.array(updated_parameters["scoring"], dtype=float)
-        last_state_biases = np.array(updated_parameters["biases"], dtype=float)
+        updated_state_weights = np.array(updated_parameters["scoring"], dtype=float)
+        updated_state_biases = np.array(updated_parameters["biases"], dtype=float)
 
-        # Update scoring in model_config for next iteration
-        model_config["scoring"] = last_state_weights
-        model_config["biases"] = last_state_biases
+        updated_row_0_weights = np.array(updated_parameters["scoring_trans_row 0"], dtype=float)
+        updated_row_0_biases = np.array(updated_parameters["biases_trans_row 0"], dtype=float)
+
+        updated_row_1_weights = np.array(updated_parameters["scoring_trans_row 1"], dtype=float)
+        updated_row_1_biases = np.array(updated_parameters["biases_trans_row 1"], dtype=float)
+
+        updated_row_2_weights = np.array(updated_parameters["scoring_trans_row 2"], dtype=float)
+        updated_row_2_biases = np.array(updated_parameters["biases_trans_row 2"], dtype=float)
+
+
+
+        #Updating scoring for all in model_config for next iteration
+        model_config["scoring"] = updated_state_weights
+        model_config["biases"] = updated_state_biases
+
+
+        model_config["scoring_trans_row 0"] = updated_row_0_weights
+        model_config["biases_trans_row 0"] = updated_row_0_biases
+
+        model_config["scoring_trans_row 1"] = updated_row_1_weights
+        model_config["biases_trans_row 1"] = updated_row_1_biases
+
+        model_config["scoring_trans_row 2"] = updated_row_2_weights
+        model_config["biases_trans_row 2"] = updated_row_2_biases
+
+
 
     standard_params = unpack_reparameterized_params(last_params)
-    converged_hyperparams = {"scoring": model_config.get("scoring"), "biases": model_config.get("biases")}
+    converged_hyperparams = {"scoring": model_config.get("scoring"), "biases": model_config.get("biases"),
+                             "scoring_trans_row 0": model_config.get("scoring_trans_row 0"), "biases_trans_row 0": model_config.get("biases_trans_row 0"),
+    "scoring_trans_row 1": model_config.get("scoring_trans_row 1"), "biases_trans_row 1": model_config.get("biases_trans_row 1"),
+                             "scoring_trans_row 2": model_config.get("scoring_trans_row 2"), "biases_trans_row 2": model_config.get("biases_trans_row 2")}
 
     return v_predictions, standard_params, converged_hyperparams
-def model_building(these_assigned_md_DFs, these_initial_params, raw_distributions, severity_deltas, model_config):
-    """Function that contains all of the models fit to the observed data."""
-    this_fit_model = fit_predictive_linear_regression_model_of_severity(these_assigned_md_DFs)
-    these_initial_guesses = {}
+def model_building(these_empirical_counts, these_empirical_kernels, these_initial_params, raw_distributions, severity_deltas, model_config):
+    """Function that contains all the models fit to the observed data."""
     reparameterized = reparameterize(these_initial_params)
-    this_fit_SSM = fit_latent_state_space_model(these_assigned_md_DFs, reparameterized, raw_distributions,
+    this_fit_SSM = fit_latent_state_space_model(these_empirical_counts, these_empirical_kernels, reparameterized, raw_distributions,
                                                 severity_deltas, model_config)
     return this_fit_SSM
 

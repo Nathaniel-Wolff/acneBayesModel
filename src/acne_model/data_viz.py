@@ -16,7 +16,6 @@ import numpy as np
 import seaborn as sns
 import copy
 from collections import defaultdict
-from matplotlib.cm import viridis
 import statsmodels.api as sm
 from scipy.stats import dirichlet
 from scipy.stats import beta
@@ -36,137 +35,137 @@ def check_confidence_intervals(metadata_DFs, quantiles):
     boostrapped_CIs = bootstrap_CI_margin_of_error(all_severities, quantiles)
     return boostrapped_CIs
 
-def plot_histograms(first_order_probabilities):
-    """This function plots a striped heatmap to inspect the distributions of normalized acne severity states for each treatment history.
-    It uses a viridis heatmap implementation from my other repository figuresAndViewers.
-    In lieu of using the actual treatment histories themselves as x labels, the x label is the index of the history in the sequence.
-    """
-
-    x_dim = 100
-    y_dim = 200
-
-    fig = plt.figure(figsize=(x_dim, y_dim))
-    matplotlib.rc('xtick', labelsize=14)
-    matplotlib.rc('ytick', labelsize=14)
-
-    # plotting histograms of each context dependent model of acne treatment severity
-    bar_width = 0.3
-    spacing = 0.05
-
-    # sorting the distributions by the state name in reverse
-
-    real_first_order_probabilities = dict(sorted(first_order_probabilities.items(), reverse=True))
-
-    mainPanelHeight = 15
-    mainPanelWidth = 20
-
-    legendPanelHeight = .25
-    legendPanelWidth = .5
-
-    sidePanelHeight = 3
-    sidePanelWidth = .25
-
-    # setting up the panels and placing the proper positions
-    firstMainPanel = plt.axes([.05 / x_dim, .375 / y_dim, mainPanelWidth / x_dim, mainPanelHeight /
-                               y_dim])
-    firstMainPanel.set_xlabel("Treatment History Index")
-    firstMainPanel.set_title("Raw Distributions of Normalized Acne Severity States")
-
-    # setting up the legend panel
-    legendRight = plt.axes(
-        [(1 + mainPanelWidth) / x_dim, legendPanelHeight / y_dim, legendPanelWidth / x_dim, mainPanelHeight / y_dim])
-    # seting ticks of legend
-    legendRight.tick_params(bottom=False, labelbottom=False, left=True, labelleft=True, right=False, labelright=False,
-                            top=False, labeltop=False)
-
-    legendRight.set_xlim(0, .1)
-    legendRight.set_ylim(0, 20)
-    legendRight.set_yticks([0, 20], ['0', '1'])
-
-    # looping through to construct a heatmap for all distributions
-    entries = len(real_first_order_probabilities)
-    bar_width = 1 / entries
-    firstMainPanel.set_xlim(0, 1)
-    firstMainPanel.set_ylim(0, 1)
-
-    x_pos = 0
-    for history, raw_distribution in real_first_order_probabilities.items():
-        distribution = defaultdict(float, raw_distribution)
-        scaled_x_pos = x_pos * bar_width
-
-        high_fc = viridis(distribution["High Severity"])[:3]
-        med_fc = viridis(distribution["Medium Severity"])[:3]
-        low_fc = viridis(distribution["Low Severity"])[:3]
-
-        firstMainPanel.add_patch(
-            rect([scaled_x_pos, 2 / 3], width=bar_width, height=1 / 3, facecolor=high_fc, edgecolor='black',
-                 linewidth=0.25))
-        firstMainPanel.add_patch(
-            rect([scaled_x_pos, 1 / 3], width=bar_width, height=1 / 3, facecolor=med_fc, edgecolor='black',
-                 linewidth=0.25))
-        firstMainPanel.add_patch(
-            rect([scaled_x_pos, 0], width=bar_width, height=1 / 3, facecolor=low_fc, edgecolor='black', linewidth=0.25))
-
-        x_actual_spot = scaled_x_pos + bar_width / 2
-
-        x_pos += 1
-    num_rects = len(real_first_order_probabilities)
-    tick_positions = [i * bar_width + bar_width / 2 for i in range(num_rects)]
-
-    firstMainPanel.set_xticks(tick_positions)
-    firstMainPanel.set_xticklabels(['' for _ in tick_positions])
-    firstMainPanel.set_yticks([1 / 6, 0.5, 5 / 6])
-    firstMainPanel.set_yticklabels(["Low Severity", "Medium Severity", "High Severity"], fontsize=15)
-
-    # plotting viridis heatmap in the sidebar
-    # color map tuple pair linspaces, viridis values
-    vvLin1Red = np.linspace(68 / 255, 59 / 255, 5)
-    vvLin2Red = np.linspace(59 / 255, 33 / 255, 6)
-    vvLin3Red = np.linspace(33 / 255, 94 / 255, 6)
-    vvLin4Red = np.linspace(94 / 255, 253 / 255, 6)
-
-    vvLin1Green = np.linspace(1 / 255, 82 / 255, 5)
-    vvLin2Green = np.linspace(82 / 255, 145 / 255, 6)
-    vvLin3Green = np.linspace(145 / 255, 201 / 255, 6)
-    vvLin4Green = np.linspace(201 / 255, 231 / 255, 6)
-
-    vvLin1Blue = np.linspace(84 / 255, 139 / 255, 5)
-    vvLin2Blue = np.linspace(139 / 255, 140 / 255, 6)
-    vvLin3Blue = np.linspace(140 / 255, 98 / 255, 6)
-    vvLin4Blue = np.linspace(98 / 255, 37 / 255, 6)
-
-    plLin4Red = np.linspace(245 / 255, 237 / 255, 5)
-    plLin3Red = np.linspace(190 / 255, 245 / 255, 6)
-    plLin2Red = np.linspace(87 / 255, 190 / 255, 6)
-    plLin1Red = np.linspace(15 / 255, 87 / 255, 6)
-
-    plLin4Green = np.linspace(135 / 255, 252 / 255, 5)
-    plLin3Green = np.linspace(48 / 255, 135 / 255, 6)
-    plLin2Green = np.linspace(0 / 255, 48 / 255, 6)
-    plLin1Green = np.linspace(0 / 255, 0 / 255, 6)
-
-    plLin4Blue = np.linspace(48 / 255, 27 / 255, 5)
-    plLin3Blue = np.linspace(101 / 255, 48 / 255, 6)
-    plLin2Blue = np.linspace(151 / 255, 101 / 255, 6)
-    plLin1Blue = np.linspace(118 / 255, 151 / 255, 6)
-
-    # total linspaces for all tuple pairs, viridis values
-    vvListOfRedLins = list(vvLin1Red) + list(vvLin2Red) + list(vvLin3Red) + list(vvLin4Red)
-    vvListOfGreenLins = list(vvLin1Green) + list(vvLin2Green) + list(vvLin3Green) + list(vvLin4Green)
-    vvListOfBlueLins = list(vvLin1Blue) + list(vvLin2Blue) + list(vvLin3Blue) + list(vvLin4Blue)
-
-    orderedVVRed = list(dict.fromkeys(vvListOfRedLins))
-    orderedVVGreen = list(dict.fromkeys(vvListOfGreenLins))
-    orderedVVBlue = list(dict.fromkeys(vvListOfBlueLins))
-
-    # viridis heatmaps into the legend panel
-    for index in range(0, 20, 1):
-        colorPaletteVV = (orderedVVRed[index], orderedVVGreen[index], orderedVVBlue[index])
-        vvGradeRect = rect([0, index], .1, 8, facecolor=colorPaletteVV, edgecolor='black', linewidth=0)
-        legendRight.add_patch(vvGradeRect)
-
-    plt.savefig("Raw_Striped_Heatmap")
-    plt.close()
+# def plot_histograms(first_order_probabilities):
+#     """This function plots a striped heatmap to inspect the distributions of normalized acne severity states for each treatment history.
+#     It uses a viridis heatmap implementation from my other repository figuresAndViewers.
+#     In lieu of using the actual treatment histories themselves as x labels, the x label is the index of the history in the sequence.
+#     """
+#
+#     x_dim = 100
+#     y_dim = 200
+#
+#     fig = plt.figure(figsize=(x_dim, y_dim))
+#     matplotlib.rc('xtick', labelsize=14)
+#     matplotlib.rc('ytick', labelsize=14)
+#
+#     # plotting histograms of each context dependent model of acne treatment severity
+#     bar_width = 0.3
+#     spacing = 0.05
+#
+#     # sorting the distributions by the state name in reverse
+#
+#     real_first_order_probabilities = dict(sorted(first_order_probabilities.items(), reverse=True))
+#
+#     mainPanelHeight = 15
+#     mainPanelWidth = 20
+#
+#     legendPanelHeight = .25
+#     legendPanelWidth = .5
+#
+#     sidePanelHeight = 3
+#     sidePanelWidth = .25
+#
+#     # setting up the panels and placing the proper positions
+#     firstMainPanel = plt.axes([.05 / x_dim, .375 / y_dim, mainPanelWidth / x_dim, mainPanelHeight /
+#                                y_dim])
+#     firstMainPanel.set_xlabel("Treatment History Index")
+#     firstMainPanel.set_title("Raw Distributions of Normalized Acne Severity States")
+#
+#     # setting up the legend panel
+#     legendRight = plt.axes(
+#         [(1 + mainPanelWidth) / x_dim, legendPanelHeight / y_dim, legendPanelWidth / x_dim, mainPanelHeight / y_dim])
+#     # seting ticks of legend
+#     legendRight.tick_params(bottom=False, labelbottom=False, left=True, labelleft=True, right=False, labelright=False,
+#                             top=False, labeltop=False)
+#
+#     legendRight.set_xlim(0, .1)
+#     legendRight.set_ylim(0, 20)
+#     legendRight.set_yticks([0, 20], ['0', '1'])
+#
+#     # looping through to construct a heatmap for all distributions
+#     entries = len(real_first_order_probabilities)
+#     bar_width = 1 / entries
+#     firstMainPanel.set_xlim(0, 1)
+#     firstMainPanel.set_ylim(0, 1)
+#
+#     x_pos = 0
+#     for history, raw_distribution in real_first_order_probabilities.items():
+#         distribution = defaultdict(float, raw_distribution)
+#         scaled_x_pos = x_pos * bar_width
+#
+#         high_fc = viridis(distribution["High Severity"])[:3]
+#         med_fc = viridis(distribution["Medium Severity"])[:3]
+#         low_fc = viridis(distribution["Low Severity"])[:3]
+#
+#         firstMainPanel.add_patch(
+#             rect([scaled_x_pos, 2 / 3], width=bar_width, height=1 / 3, facecolor=high_fc, edgecolor='black',
+#                  linewidth=0.25))
+#         firstMainPanel.add_patch(
+#             rect([scaled_x_pos, 1 / 3], width=bar_width, height=1 / 3, facecolor=med_fc, edgecolor='black',
+#                  linewidth=0.25))
+#         firstMainPanel.add_patch(
+#             rect([scaled_x_pos, 0], width=bar_width, height=1 / 3, facecolor=low_fc, edgecolor='black', linewidth=0.25))
+#
+#         x_actual_spot = scaled_x_pos + bar_width / 2
+#
+#         x_pos += 1
+#     num_rects = len(real_first_order_probabilities)
+#     tick_positions = [i * bar_width + bar_width / 2 for i in range(num_rects)]
+#
+#     firstMainPanel.set_xticks(tick_positions)
+#     firstMainPanel.set_xticklabels(['' for _ in tick_positions])
+#     firstMainPanel.set_yticks([1 / 6, 0.5, 5 / 6])
+#     firstMainPanel.set_yticklabels(["Low Severity", "Medium Severity", "High Severity"], fontsize=15)
+#
+#     # plotting viridis heatmap in the sidebar
+#     # color map tuple pair linspaces, viridis values
+#     vvLin1Red = np.linspace(68 / 255, 59 / 255, 5)
+#     vvLin2Red = np.linspace(59 / 255, 33 / 255, 6)
+#     vvLin3Red = np.linspace(33 / 255, 94 / 255, 6)
+#     vvLin4Red = np.linspace(94 / 255, 253 / 255, 6)
+#
+#     vvLin1Green = np.linspace(1 / 255, 82 / 255, 5)
+#     vvLin2Green = np.linspace(82 / 255, 145 / 255, 6)
+#     vvLin3Green = np.linspace(145 / 255, 201 / 255, 6)
+#     vvLin4Green = np.linspace(201 / 255, 231 / 255, 6)
+#
+#     vvLin1Blue = np.linspace(84 / 255, 139 / 255, 5)
+#     vvLin2Blue = np.linspace(139 / 255, 140 / 255, 6)
+#     vvLin3Blue = np.linspace(140 / 255, 98 / 255, 6)
+#     vvLin4Blue = np.linspace(98 / 255, 37 / 255, 6)
+#
+#     plLin4Red = np.linspace(245 / 255, 237 / 255, 5)
+#     plLin3Red = np.linspace(190 / 255, 245 / 255, 6)
+#     plLin2Red = np.linspace(87 / 255, 190 / 255, 6)
+#     plLin1Red = np.linspace(15 / 255, 87 / 255, 6)
+#
+#     plLin4Green = np.linspace(135 / 255, 252 / 255, 5)
+#     plLin3Green = np.linspace(48 / 255, 135 / 255, 6)
+#     plLin2Green = np.linspace(0 / 255, 48 / 255, 6)
+#     plLin1Green = np.linspace(0 / 255, 0 / 255, 6)
+#
+#     plLin4Blue = np.linspace(48 / 255, 27 / 255, 5)
+#     plLin3Blue = np.linspace(101 / 255, 48 / 255, 6)
+#     plLin2Blue = np.linspace(151 / 255, 101 / 255, 6)
+#     plLin1Blue = np.linspace(118 / 255, 151 / 255, 6)
+#
+#     # total linspaces for all tuple pairs, viridis values
+#     vvListOfRedLins = list(vvLin1Red) + list(vvLin2Red) + list(vvLin3Red) + list(vvLin4Red)
+#     vvListOfGreenLins = list(vvLin1Green) + list(vvLin2Green) + list(vvLin3Green) + list(vvLin4Green)
+#     vvListOfBlueLins = list(vvLin1Blue) + list(vvLin2Blue) + list(vvLin3Blue) + list(vvLin4Blue)
+#
+#     orderedVVRed = list(dict.fromkeys(vvListOfRedLins))
+#     orderedVVGreen = list(dict.fromkeys(vvListOfGreenLins))
+#     orderedVVBlue = list(dict.fromkeys(vvListOfBlueLins))
+#
+#     # viridis heatmaps into the legend panel
+#     for index in range(0, 20, 1):
+#         colorPaletteVV = (orderedVVRed[index], orderedVVGreen[index], orderedVVBlue[index])
+#         vvGradeRect = rect([0, index], .1, 8, facecolor=colorPaletteVV, edgecolor='black', linewidth=0)
+#         legendRight.add_patch(vvGradeRect)
+#
+#     plt.savefig("Raw_Striped_Heatmap")
+#     plt.close()
 
 def find_dirichlet_marginal_cis(alphas, confidence_level=.95):
     """Function that is wrapped by the below function. Calculates the upper and lower quantiles supplied by confidence interval
