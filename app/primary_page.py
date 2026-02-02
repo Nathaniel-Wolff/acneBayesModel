@@ -8,11 +8,11 @@ from scipy.stats import beta
 from acne_model.model import state_evolution_vv as evolution_function
 from acne_model.model import reparameterize
 from acne_model.model import map_latent_states_to_probs as severity_distribution_function
-from acne_model.model import compute_cluster_dirichlets, assign_label
+from acne_model.model import compute_cluster_dirichlets, assign_label, adjust_empirical_kernel
 from collections import defaultdict
 
 st.title("Acne Severity Analysis")
-st.set_page_config(layout="wide")
+st.set_page_config(layout = "wide")
 
 #calling the model with test dataset
 def calling_model(this_raw_data_name, json_name):
@@ -24,7 +24,7 @@ def calling_model(this_raw_data_name, json_name):
     these_empirical_trans_matrices = data_returns[7]
     transition_counts = data_returns[8]
 
-    st.write("empirical matrices", these_empirical_trans_matrices)
+    #st.write("empirical matrices", these_empirical_trans_matrices)
 
 
 
@@ -34,12 +34,12 @@ def calling_model(this_raw_data_name, json_name):
         this_model_config = {"scoring": np.random.randn(3, 3) * 0.02,
                              # column order: low severity change, medium, high. row order: #bacteria, inflammation, sebum.
                              "biases": [0, 0, 0],
-                             "scoring_trans_row 0": [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
-                             "biases_trans_row 0": [0, 0, 0],
-                             "scoring_trans_row 1": [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
-                             "biases_trans_row 1": [0, 0, 0],
-                             "scoring_trans_row 2": [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
-                             "biases_trans_row 2": [0, 0, 0],
+                             "scoring_trans_row 0": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+                             "biases_trans_row 0": [0.0, 0.0, 0.0],
+                             "scoring_trans_row 1": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+                             "biases_trans_row 1": [0.0, 0.0, 0.0],
+                             "scoring_trans_row 2": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+                             "biases_trans_row 2": [0.0, 0.0, 0.0],
                              "Q": np.eye(3) * (initial_constant_guesses["w_sigma"] ** 2),
                              "R": np.eye(3) * (initial_constant_guesses["m_sigma"] ** 2)}
 
@@ -48,7 +48,7 @@ def calling_model(this_raw_data_name, json_name):
     this_built_model = model_building(these_empirical_counts=transition_counts, these_empirical_kernels=these_empirical_trans_matrices, these_initial_params=initial_constant_guesses, raw_distributions=these_dirichlets,
                                       severity_deltas=these_averages,
                                       model_config=this_model_config)
-    st.write(this_built_model)
+
     return this_built_model, these_averages, these_dirichlets, these_empirical_trans_matrices, transition_counts
 def build_trajectory(**kwargs):
     """Function to create a new treatment trajectory given the everpresent widgets above."""
@@ -83,18 +83,24 @@ def build_trajectory(**kwargs):
         st.session_state.debug_last_commit = full_history
 
         return full_history
-def compute_severity_series(fitted_model_params, severity_deltas, scoring_hyperparams, trajectory, initial_state, centers, labels, dirichlets):
+def compute_severity_series(fitted_model_params, severity_deltas, scoring_hyperparams, trajectory, initial_state, centers, labels, dirichlets, empirical_kernels):
     """"Function using the fitted model params to predict a latent state for a given treatment trajectory."""
     last_latent_state = initial_state
     pred_latent_states = []
     dirs_and_expectations = defaultdict(tuple)
     histories = []
+    adjusted_kernels = []
 
-    #collecting Dirichlets
+
+    #collecting Dirichlets and finding adjusted Kernels
     for index, history_day in enumerate(trajectory):
         reparams = reparameterize(fitted_model_params)
         output_latent_state, unused_tstd, days_antibiotics, cream_used = evolution_function(v_t_last = last_latent_state, params = reparams, raw_distribution = None, severity_deltas = severity_deltas,
                                     index = index, history = history_day)
+
+        adjusted_kernel = adjust_empirical_kernel(scoring_hyperparams=scoring_hyperparams, latent_state=output_latent_state, empirical_kernel=empirical_kernels[index+1])
+        adjusted_kernels.append(adjusted_kernel)
+
 
         label = assign_label(output_latent_state, centers)
         actual_label = str(labels[label])
@@ -111,66 +117,99 @@ def compute_severity_series(fitted_model_params, severity_deltas, scoring_hyperp
 
         last_latent_state = output_latent_state
 
-    return dirs_and_expectations, histories
-
-
-
-def compute_trajectory_prob(trajectory, transition_matrices):
+    return dirs_and_expectations, histories, adjusted_kernels
+def compute_subtrajectory_prob(trajectory, current_transition_matrix):
     last_pr = trajectory[1] #trajectory is in the form ([S1, S2...Sn], Pr(Trajectory))
-    for i, states in enumerate(trajectory[0][1:]):
-        previous_state = states[i-1] #should evaluate to int
-        current_state = states[i] #should evaluate to int
-        current_transition_matrix = transition_matrices[i]
+    states_list = trajectory[0]
+
+    if len(states_list) > 1:
+        previous_state = states_list[len(states_list)-2] #index screwed up somewhere?
+        current_state = states_list[len(states_list)-1]
         current_transition_prob = current_transition_matrix[current_state][previous_state]
         last_pr *= current_transition_prob
-    return last_pr
+    else:
+        pass
 
+
+    return last_pr
 def extend_and_prune_trajectories(actual_trajectories, the_transition_matrices, the_top_log_pr, the_max_trajectories, initial_distribution):
     #1 for low change, 2 for medium change, 3 for high change
     if len(actual_trajectories) != 0:
         #------ extension
-        for trajectory in actual_trajectories: #trajectory is in the form ([S1, S2...Sn], Pr(Trajectory))
-            trajectory[0].append(1)
-        for trajectory in actual_trajectories:
-            trajectory[0].append(2)
-        for trajectory in actual_trajectories:
-            trajectory[0].append(3)
+        extended_trajectories = []
+        for traj, log_prob in actual_trajectories: #trajectory is in the form ([S1, S2...Sn], Pr(Trajectory))
+            for next_state in [0, 1, 2]:
+                new_traj = traj + [next_state]  # creates a new list
+                extended_trajectories.append((new_traj, log_prob))
+            actual_trajectories = extended_trajectories
+
         #------ probability calculation and pruning
         updated_trajectories = []
         for appended_trajectory in actual_trajectories:
-            new_computed_prob_log = np.log(compute_trajectory_prob(appended_trajectory, the_transition_matrices))
-            updated_trajectories.append(appended_trajectory[0], new_computed_prob_log)
-            #mental note: Order the trajectories in terms of new probabilities, then cut off
-            #most of them, and move them forward, You'll have to output the updated trajectories
-            #instead of the actual ones. Check if sets will screw this up bc of mutatability.
-        #sorting trajectories by probability
-        updated_trajectories.sort(key = lambda prob: prob[1])
-        datatype = np.dtype([("traj", list), ("logprob", float)]) #datatype for these arrays
-        structured_trajectory_array = np.array(updated_trajectories, dtype = datatype)
-        mask = structured_trajectory_array["logprob"] >= the_top_log_pr
-        masked_traj_array = np.ma.masked_where(mask, structured_trajectory_array)
+            new_computed_prob_log = np.log(compute_subtrajectory_prob(appended_trajectory, the_transition_matrices) + 1e-12) #included small epsilon
+            updated_trajectories.append((appended_trajectory[0], new_computed_prob_log))
+        #---- sorting trajectories by probability
+        updated_trajectories.sort(key=lambda x: x[1], reverse=True)
+        #datatype = np.dtype([("traj", list), ("logprob", float)]) #datatype for these arrays
+        #structured_trajectory_array = np.array(updated_trajectories, dtype = datatype)
+        filtered_trajectories = [(traj, logp) for traj, logp in updated_trajectories if logp >= the_top_log_pr]
 
-        array_as_list = list(masked_traj_array)
+        array_as_list = list(filtered_trajectories)
         return array_as_list
 
     else:
-        #using set to avoid any potential duplication
-        actual_trajectories = {([m], initial_distribution[m]) for m in range(3)} #initialize probabilities from initial distribution
+        actual_trajectories = [([m], initial_distribution[m]) for m in range(3)] #initialize probabilities from initial distribution
+        return actual_trajectories
+
+def beam_search_trajectories(
+        trajectory,
+    transition_matrices, severity_deltas, initial_severity = 1.0,
+    initial_distribution=np.array([0.7, 0.1, 0.1]),
+    top_k=3):
+    """
+    Iterative beam search for subtrajectory generation (sequence of acne severity change states), given the properly inferred kernels.
+    Returns:
+        List of (trajectory, logprob) tuples, top-K sub_trajectories after max_length steps
+    """
+
+    # Initialize sub_trajectories: ([state1], logprob)
+    sub_trajectories = [([i], float(np.log(initial_distribution[i] + 1e-12))) for i in range(len(initial_distribution))]
+    for treatment_step in range(len(trajectory)):
+        new_trajectories = []
+
+        transition_matrix = transition_matrices[treatment_step]
+        for traj, logp in sub_trajectories:
+            last_state = traj[-1]
+            running_prob = logp
+            for next_state in range(3):  # 3 possible states: 0,1,2
+                new_traj = traj + [next_state]
+                transition_log_p = np.log(transition_matrix[last_state][next_state])
+                new_logp = float(running_prob + transition_log_p)
+                new_trajectories.append((new_traj, new_logp))
+
+            # sort top-K
+        new_trajectories.sort(key=lambda x: x[1], reverse=True)
+        sub_trajectories = new_trajectories[:top_k]
+
+        if not new_trajectories:
+            break
+    severity_delta_values = list(severity_deltas.values())
+    #converting trajectories into severity decrease series (need to pair this with initial latent state severity decreases)
+
+    all_severity_series = []
+
+    for built_trajectory, prob in sub_trajectories:
+        severity_series = [initial_severity]
+        for state in built_trajectory:
+            severity_series.append(severity_series[-1] * severity_delta_values[state]*.01)
+
+        all_severity_series.append(severity_series)
 
 
-    return actual_trajectories
+    return sub_trajectories, all_severity_series
+def plot_mixture_dir_sev_change(plot, trajectories_dirichlets, kernels, severity_deltas, initial_distribution = np.array([0.7, 0.1, 0.1]), window_size = 20, confidence_level = .95, width = 1):
+    """Function to plot Dirichlet mixture, given both inferred kernels and inferred Dirichlets from clustering."""
 
-def branch_and_bound_trajectories(transition_matrices, initial_distribution, trajectories = [], top_k = 3, max_trajectories = 35):
-    """Recursive implementation of the branch and bound algorithm for beam scoring of potential trajectories."""
-    if len(trajectories) != max_trajectories:
-        branch_and_bound_trajectories(transition_matrices  = transition_matrices, trajectories = extend_and_prune_trajectories(trajectories, transition_matrices, top_k, max_trajectories),
-                                      top_k = top_k, max_trajectories = max_trajectories)
-    else:
-        return trajectories
-
-
-def plot_severity_series(plot, trajectories_dirichlets, severity_deltas, window_size = 20, confidence_level = .95, width = 1):
-    """Function to plot Dirichlet credible intervals over a plot."""
     colors = ["tab:green", "tab:gray", "tab:red"]
     labels = ["High Decrease", "Medium Decrease", "Low Decrease"]
 
@@ -182,16 +221,26 @@ def plot_severity_series(plot, trajectories_dirichlets, severity_deltas, window_
 
     real_deltas = list(severity_deltas.values())
 
+
     for trajectory in trajectories_dirichlets:
         T = len(trajectory)
         t = np.arange(T)
 
+
         means = {k: [] for k in range(3)}
         low = {k: [] for k in range(3)}
         high = {k: [] for k in range(3)}
+
+        mixture_dir = initial_distribution
+        last_latent_state_pr = initial_distribution
+
         for index, (expected_val, dirichlet) in trajectory.items():
             alpha = np.array(dirichlet)
             alpha0 = alpha.sum()
+            kernel = kernels[index]
+
+            next_prob = kernel @ last_latent_state_pr
+            weighted_dir_term = np.dot(dirichlet, next_prob) #figure out how to do the proper weighting...
 
             for k in range(3):
                 means[k].append(alpha[k] / alpha0)
@@ -211,7 +260,7 @@ def plot_severity_series(plot, trajectories_dirichlets, severity_deltas, window_
             )
 
         plot.set_xlim(start_limit, end_limit)
-        #plot.set_ylim(0, 1)
+
         plot.set_xlabel("Day")
         plot.set_ylabel("Acne Severity Percentage")
         plot.legend()
@@ -224,7 +273,6 @@ def plot_severity_series(plot, trajectories_dirichlets, severity_deltas, window_
     ax.relim()  # Recompute the data limits
     ax.autoscale_view(True, True, True)  # Apply the new limits to all axes
     plt.legend(by_label.values(), by_label.keys())
-
 def baseline_sev_changed():
     st.session_state.baseline_severity = st.session_state.draft_severity
 def antibiotics_changed():
@@ -243,7 +291,6 @@ def commit_trajectory():
     # reset sliders
     st.session_state.draft_antibiotics = 0
     st.session_state.draft_retinol = 0
-
 def set_window():
     pass
 def main():
@@ -279,7 +326,6 @@ def main():
     if "empirical_counts" not in st.session_state:
         st.session_state.empirical_counts = []
 
-
     if st.session_state.get("_reset_sliders", False):
         st.session_state.draft_antibiotics = 0
         st.session_state.draft_retinol = 0
@@ -313,7 +359,6 @@ def main():
     initial_sebum = st.slider("Sebum", 0.0, 1.0, 0.1)
     initial_bacterial_load = st.slider("Bacterial Load", 0.0, 1.0, 0.1)
 
-    #initial_inflamatory_state = st.number_input("Patient's Initial Severity")
     initial_baseline_severity = st.number_input("Patient's Initial Severity", help = "(Pre-Normalize for best results)", key = "draft_severity", on_change = baseline_sev_changed())
 
 
@@ -348,24 +393,28 @@ def main():
     st.session_state.empirical_matrices = ob_empirical_matrices
     st.session_state.raw_counts = ob_raw_counts
 
-    these_inferred_latent_states = list(this_called_model[0].values())
-    clustered_states, these_clusters = compute_cluster_dirichlets(these_inferred_latent_states, observed_dirichlets)
+    latent_states_empirical = list(this_called_model[0].values())
+
+    clustered_states, these_clusters = compute_cluster_dirichlets(latent_states_empirical, observed_dirichlets)
     these_new_centers, these_labels, these_counts, these_regions_distances = these_clusters
 
     all_severity_series = []
     for trajectory in st.session_state.trajectories:
-        computed_severity_series, histories = compute_severity_series(fitted_model_params=this_called_model[1], severity_deltas=these_deltas,
+        computed_severity_series, histories, kernels = compute_severity_series(fitted_model_params=this_called_model[1], severity_deltas=these_deltas,
             trajectory=trajectory, scoring_hyperparams=this_called_model[2], initial_state=configured_initial_state, centers = these_new_centers, labels = these_labels,
-                                                           dirichlets=clustered_states)
+                                                           empirical_kernels=st.session_state.empirical_matrices, dirichlets=clustered_states)
         all_severity_series.append(computed_severity_series)
+        pruned_trajectories = beam_search_trajectories(transition_matrices=kernels, trajectory=trajectory, severity_deltas=st.session_state.these_deltas)
+
+        #st.write(pruned_trajectories)
 
     col1, col2 = st.columns([20, 1])
 
     with col1:
         fig, ax = plt.subplots(figsize=(20, 8))
-        plotted_trajectories = plot_severity_series(ax, fig, all_severity_series, st.session_state.these_deltas,
-                                                    window_size=st.session_state.window_size, confidence_level=.95)
-        st.write(all_severity_series) #testing
+        plotted_trajectories = plot_mixture_dir_sev_change(plot = ax, trajectories_dirichlets=all_severity_series, kernels=kernels, severity_deltas=st.session_state.these_deltas,
+                                                           window_size=st.session_state.window_size, confidence_level=.95)
+        #st.write(all_severity_series) #testing
         st.pyplot(fig)
 
     with col2:

@@ -497,6 +497,16 @@ def optimize_a_linear_parameter_set(target_values, input_matrix, mu=0.0, sigma=1
 
     return theta
 
+def adjust_empirical_kernel(scoring_hyperparams, latent_state, empirical_kernel, number_states = 3):
+    """Function to adjust an empirical kernel as a function of latent state. Used in Streamlit implementation."""
+    all_rows = []
+    for row_index, row in enumerate(empirical_kernel):
+        adjusted_row = softmax(np.log(row) + np.dot(scoring_hyperparams["scoring_trans_row {}".format(row_index)], latent_state) + scoring_hyperparams["biases_trans_row {}".format(row_index)])
+        all_rows.append(adjusted_row)
+    adjusted_kernel = np.array(all_rows).reshape((number_states, number_states))
+    return adjusted_kernel
+
+
 def full_maximimzation_step(pred_state_vectors, raw_distributions, parameters, model_params, prev_state_vectors,days_antibiotics,cream_useds,severity_deltas, empirical_counts, empirical_kernels, learning_rate=1e-4,max_grad_steps=30):
     #need to add optimization of Markov process Kernels
     # 1. Optimize nonlinear scoring weight and bias hyperparameters
