@@ -123,7 +123,7 @@ def compute_subtrajectory_prob(trajectory, current_transition_matrix):
     states_list = trajectory[0]
 
     if len(states_list) > 1:
-        previous_state = states_list[len(states_list)-2] #index screwed up somewhere?
+        previous_state = states_list[len(states_list)-2]
         current_state = states_list[len(states_list)-1]
         current_transition_prob = current_transition_matrix[current_state][previous_state]
         last_pr *= current_transition_prob
@@ -174,6 +174,7 @@ def beam_search_trajectories(
 
     # Initialize sub_trajectories: ([state1], logprob)
     sub_trajectories = [([i], float(np.log(initial_distribution[i] + 1e-12))) for i in range(len(initial_distribution))]
+
     for treatment_step in range(len(trajectory)):
         new_trajectories = []
 
@@ -207,19 +208,22 @@ def beam_search_trajectories(
 
 
     return sub_trajectories, all_severity_series
-def plot_mixture_dir_sev_change(plot, trajectories_dirichlets, kernels, severity_deltas, initial_distribution = np.array([0.7, 0.1, 0.1]), window_size = 20, confidence_level = .95, width = 1):
+def plot_mixture_dir_sev_change(plot, trajectories_dirichlets, kernels, severity_deltas, window_size = 20, confidence_level = .95, width = 1):
     """Function to plot Dirichlet mixture, given both inferred kernels and inferred Dirichlets from clustering."""
 
     colors = ["tab:green", "tab:gray", "tab:red"]
     labels = ["High Decrease", "Medium Decrease", "Low Decrease"]
 
     day = st.session_state.day
-    initial_severity = st.session_state.initial_severity
+
 
     start_limit = day
     end_limit = start_limit + window_size
 
-    real_deltas = list(severity_deltas.values())
+    real_deltas = np.array(list(severity_deltas.values()))
+
+
+
 
 
     for trajectory in trajectories_dirichlets:
@@ -231,16 +235,42 @@ def plot_mixture_dir_sev_change(plot, trajectories_dirichlets, kernels, severity
         low = {k: [] for k in range(3)}
         high = {k: [] for k in range(3)}
 
-        mixture_dir = initial_distribution
-        last_latent_state_pr = initial_distribution
+        probs = []
+
+
+
+        initial_dist = np.array(list(trajectory.values())[0][1])
+        initial_dist_sum =  np.sum(initial_dist)
+        initial_dist_expectation = initial_dist / initial_dist_sum
+
+
+        last_latent_state_pr = initial_dist_expectation
+        severity_series = [st.session_state.initial_severity]
+        st.write(severity_series)
+
+        pruned_trajectories, the_top_severities_series = beam_search_trajectories(transition_matrices=kernels, trajectory=trajectory,
+                                                       severity_deltas=st.session_state.these_deltas, initial_severity=st.session_state.initial_severity,
+                                                       initial_distribution=initial_dist)
+
+
 
         for index, (expected_val, dirichlet) in trajectory.items():
             alpha = np.array(dirichlet)
             alpha0 = alpha.sum()
+
             kernel = kernels[index]
 
             next_prob = kernel @ last_latent_state_pr
-            weighted_dir_term = np.dot(dirichlet, next_prob) #figure out how to do the proper weighting...
+
+            next_prob /= np.sum(next_prob)
+
+            probs.append(next_prob)
+            expected_severity_change_percent = 1 - (.01 * (real_deltas.T @ next_prob))
+            severity_series.append(severity_series[-1] * expected_severity_change_percent)
+            last_latent_state_pr = next_prob
+
+
+
 
             for k in range(3):
                 means[k].append(alpha[k] / alpha0)
@@ -248,21 +278,17 @@ def plot_mixture_dir_sev_change(plot, trajectories_dirichlets, kernels, severity
                 high[k].append(beta.ppf(0.975, alpha[k], alpha0 - alpha[k]))
 
         for k, (label, color) in enumerate(zip(labels, colors)):
-            real_delta = real_deltas[k]
-            # *np.ones(len(means[k][start_limit:end_limit]))*real_delta
-            plot.plot(t[start_limit:end_limit], (means[k][start_limit:end_limit]), color=color, label=label)
-            plot.fill_between(
-                t[start_limit:end_limit],
-                (low[k][start_limit:end_limit]),#*np.ones(len(low[k][start_limit:end_limit]))*real_delta,
-                (high[k][start_limit:end_limit]),#*np.ones(len(high[k][start_limit:end_limit]))*real_delta,
-                color=color,
-                alpha=0.25
-            )
+            #plot.plot(t[start_limit:end_limit], (means[k][start_limit:end_limit]), color=color, label=label)
+            plot.plot(t[start_limit:end_limit], (severity_series[start_limit:end_limit]), color=color, label=label)
+
+        for one_series in the_top_severities_series:
+            plot.plot(t[start_limit:end_limit], (one_series[start_limit:end_limit]), color="blue")
+
 
         plot.set_xlim(start_limit, end_limit)
 
         plot.set_xlabel("Day")
-        plot.set_ylabel("Acne Severity Percentage")
+        plot.set_ylabel("Acne Severity")
         plot.legend()
 
     handles, labels = plt.gca().get_legend_handles_labels()
@@ -287,6 +313,7 @@ def commit_trajectory():
     st.session_state.trajectories.append(
         list(st.session_state.draft_trajectory)
     )
+
     st.session_state.draft_trajectory.clear()
     # reset sliders
     st.session_state.draft_antibiotics = 0
@@ -296,7 +323,6 @@ def set_window():
 def main():
     # Clinician Input Sliders
     st.header("Treatment Inputs")
-    these_initial_distributions = np.array([0.5, 0.4, 0.1]) #in order of low severity change, medium, high
 
     # initialization
     if "trajectories" not in st.session_state:
@@ -359,8 +385,12 @@ def main():
     initial_sebum = st.slider("Sebum", 0.0, 1.0, 0.1)
     initial_bacterial_load = st.slider("Bacterial Load", 0.0, 1.0, 0.1)
 
-    initial_baseline_severity = st.number_input("Patient's Initial Severity", help = "(Pre-Normalize for best results)", key = "draft_severity", on_change = baseline_sev_changed())
-
+    initial_severity = st.slider(
+        "Patient's Initial Severity",
+        0.0, 30.0,
+        value = 1.0 if st.session_state.get("_reset_sliders", False) else st.session_state.draft_severity,
+        key="draft_severity",
+        on_change=baseline_sev_changed())
 
     antibiotics_days = st.slider(
     "Days of Antibiotics",
@@ -400,25 +430,22 @@ def main():
 
     all_severity_series = []
     for trajectory in st.session_state.trajectories:
-        computed_severity_series, histories, kernels = compute_severity_series(fitted_model_params=this_called_model[1], severity_deltas=these_deltas,
+        computed_severity_series, histories, these_kernels = compute_severity_series(fitted_model_params=this_called_model[1], severity_deltas=these_deltas,
             trajectory=trajectory, scoring_hyperparams=this_called_model[2], initial_state=configured_initial_state, centers = these_new_centers, labels = these_labels,
                                                            empirical_kernels=st.session_state.empirical_matrices, dirichlets=clustered_states)
         all_severity_series.append(computed_severity_series)
-        pruned_trajectories = beam_search_trajectories(transition_matrices=kernels, trajectory=trajectory, severity_deltas=st.session_state.these_deltas)
-
-        #st.write(pruned_trajectories)
-
-    col1, col2 = st.columns([20, 1])
-
-    with col1:
+        pruned_trajectories = beam_search_trajectories(transition_matrices=these_kernels, trajectory=trajectory, severity_deltas=st.session_state.these_deltas, top_k=6)
         fig, ax = plt.subplots(figsize=(20, 8))
-        plotted_trajectories = plot_mixture_dir_sev_change(plot = ax, trajectories_dirichlets=all_severity_series, kernels=kernels, severity_deltas=st.session_state.these_deltas,
-                                                           window_size=st.session_state.window_size, confidence_level=.95)
-        #st.write(all_severity_series) #testing
+        plotted_trajectories = plot_mixture_dir_sev_change(plot=ax, trajectories_dirichlets=all_severity_series,
+                                                           kernels=these_kernels,
+                                                           severity_deltas=st.session_state.these_deltas,
+                                                           window_size=st.session_state.window_size,
+                                                           confidence_level=.95)
+        #plt.colorbar()
         st.pyplot(fig)
 
-    with col2:
-        st.write(".")
+
+
 
 
 
