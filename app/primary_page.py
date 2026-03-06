@@ -1,4 +1,11 @@
 #the initial page for the streamlit app
+
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent / "src"))
+
+
+
 import streamlit as st
 from matplotlib import pyplot as plt
 import json
