@@ -3,7 +3,7 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "Acne-Model-Package"
+name = "acne-model-package"
 version = "0.0.1"
 packages = [
     { include = "acne_model", from = "src" }
@@ -26,6 +26,5 @@ dependencies = [
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-packages = ["acne_model"]
 
 
