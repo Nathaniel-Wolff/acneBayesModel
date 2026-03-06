@@ -7,6 +7,7 @@ from collections import defaultdict
 import statsmodels.api as sm
 from scipy.stats import dirichlet
 from scipy.spatial import distance_matrix
+from scipy.stats import norm
 from sklearn.cluster import KMeans
 from functools import partial
 
@@ -76,6 +77,38 @@ def fit_predictive_linear_regression_model_of_severity(metadata_dfs):
     severity_change = dataframe_for_fitting["delta_severity"]
 
     fitted_model = sm.OLS(severity_change, history_vectors_of_independent_vars).fit()
+
+
+def gaussian(std_dev, mean, dof):
+    """Implementation of Gaussian function for below use."""
+    coefficient = 1 / (std_dev * np.sqrt(2 * np.pi))
+    exponent = -((dof - mean) ** 2) / (2 * std_dev ** 2)
+    return coefficient * np.exp(exponent)
+def biomarkers_to_latent_state(c_insulin, c_IGF1, pH, ph_dependent_enzymes, ideal_microbiome_dist, params, gaussian_params, last_state):
+    K_d_insulin = .0001 #in Molar
+    K_d_IGF1 = .00001 #in Molar
+
+    last_bacterial = last_state[0]
+    last_inflammation = last_state[1]
+    last_sebum = last_state[2]
+
+    #Approximation of Inhibited MM Kinetics of Acid sphingomyelinase like ensemble in C.acnes used below
+    if len(ph_dependent_enzymes) != len(gaussian_params):
+        raise ValueError("Number of Enzymes must equal number of Gaussian Terms")
+
+    else:
+        gaussian_output = np.sum([gaussian(std_dev=this_std, mean=this_mean, dof= pH) for this_std, this_mean in gaussian_params])
+
+    mTORC1_activity = params["insulin_constant"] * (c_insulin/(c_insulin + K_d_insulin)) + params["IFG1_constant"]*(c_IGF1/(c_IGF1 + K_d_IGF1))
+    bac_dybiosis_measure = 1.23 #hardcoded for testing at this time
+    bac_dysbiosis_lipase_effect = params["lipase_kinetics_constant"] * gaussian_output * bac_dybiosis_measure * last_bacterial
+
+    next_bacterial_state = last_bacterial + params["bac_dysbiosis_rate"] * bac_dybiosis_measure
+    next_inflammation = None
+    next_sebum_production_rate = last_sebum + params["mTORC1_constant"] * mTORC1_activity + params["bac_dysbiosis_constant"] * bac_dysbiosis_lipase_effect
+
+
+
 
 def reparameterize(model_params):
     """Used to reparameterize most existing model parameters to improve identifiability."""
@@ -169,6 +202,10 @@ def state_evolution_vv(v_t_last, params, history, raw_distribution, severity_del
     cur_sebum = np.clip(cur_sebum, 0, 10)
 
     return np.array([cur_bac, cur_inf, cur_sebum]), tstd_term, days_antib, was_cream_used
+
+
+
+
 def log_prior_reparam(params, priors={
     # timescale (positive, log-normal)
     "t": (0.0, 0.5),

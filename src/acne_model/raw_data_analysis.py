@@ -50,18 +50,26 @@ def seperate_patients(raw_data):
 def add_history_metadata(seperatePatientsDFs, allPatientsIntroDays):
     """Function that adds a treatment history metadata column to each patient's dataframe by...
     1) Loading each seperate patient's dataframe and compute the average baseline severity, normalizing acne severity scores. Then modifies the dataframe, called a severities dataframe.
-    2) For each, mapping each value for treatment to the a treatment history tuple. It is a tuple of the form ((days of treatment, ai), (days of treatment, ai+1),....(days of treatment, an))
+    2) For each, mapping each value for treatment to a treatment history tuple. It is a tuple of the form ((days of treatment, ai), (days of treatment, ai+1),....(days of treatment, an))
     where n is the row number of the current day of the particular treatment."""
     #initializing dict containing severties by day for a given treatment 
     severitiesDayTreatmentDict = {treatment: None for treatment in seperatePatientsDFs[0]["treatment"]}
     modifiedDFs = []
+    other_modified_DFs = []
+    history_distributions = defaultdict(list)
+    av_baselines = []
     counter = 0 
 
     for patient_DF, days_of_intro in zip(seperatePatientsDFs, allPatientsIntroDays):
         #computing average baseline severity for each DF
         average_bl = patient_DF["AcneSeverity"].head(days_of_intro[0][2]).mean()
+        av_baselines.append(average_bl)
+
         #forming new dataframe from old one containing percent severity over baseline 
         modified_DF = patient_DF.copy()
+        other_modified_DF = patient_DF.copy() #diagnostic
+
+
         modified_DF["AcneSeverity"] = modified_DF["AcneSeverity"].apply(lambda x: (x - average_bl)/average_bl)*100
         modifiedDFs.append(modified_DF)
         counter += 1
@@ -89,6 +97,7 @@ def add_history_metadata(seperatePatientsDFs, allPatientsIntroDays):
         for row_index, row in severities_df.iterrows():
             current_day = row["day"]
             current_treatment = row["treatment"]
+            current_severity = row["AcneSeverity"]
                    
             #also checking to see if the current treatment is entirely new or falls inside a different treatment block
             if current_treatment != last_treatment_itself:
@@ -101,6 +110,7 @@ def add_history_metadata(seperatePatientsDFs, allPatientsIntroDays):
             #once history is built, the history is stored in the original dataframe as an entry in own column
             severities_df.at[row_index, "treatment_history"] = list(treatment_history)
             transient_history = treatment_history.copy()
+            history_distributions[tuple(transient_history)].append(current_severity)
             all_treatment_histories.append(transient_history)
             last_treatment_itself = current_treatment  
             
@@ -108,7 +118,9 @@ def add_history_metadata(seperatePatientsDFs, allPatientsIntroDays):
         metadata_DFs.append(severities_df[days_of_intro[0][2]:])
         
         all_patients_treatment_histories.append(all_treatment_histories)
-    return metadata_DFs, all_patients_treatment_histories
+
+
+    return metadata_DFs, all_patients_treatment_histories, history_distributions, av_baselines
 
 def find_and_plot_severity_states(metadata_DFs):
     """Determines the quantile cutoff determining the quantiles corresponding to categorical acne severity states (low, medium, and high), by
@@ -334,16 +346,14 @@ def data_parsing(data_filename):
     # actual implementation
     this_seperate_DFs, this_intro_days = seperate_patients(raw_data)
     # this_inspected_data = display_plots_of_dataset(this_seperate_DFs, this_intro_days, .1) #for inspection
-    this_md_DFs, this_treatment_history = add_history_metadata(this_seperate_DFs, this_intro_days)
+    this_md_DFs, this_treatment_history, these_history_distributions, these_baselines = add_history_metadata(this_seperate_DFs, this_intro_days)
+    print(these_baselines)
     these_states, these_ranges = find_and_plot_severity_states(this_md_DFs)
     these_assigned_md_DFs, these_state_averages = assign_states_to_mdfs(this_md_DFs, these_states, these_ranges)
 
     built_histograms, raw_probabilities = build_histograms(these_assigned_md_DFs)
     uninformative_prior = [4, 3, 1]  # with a1 corresponding to low severity, a2 corresponding to medium, and a3 corresponding to high
     built_transition_dict, transition_counts = build_empirical_transition_counts(these_assigned_md_DFs)
-
-    state_uninformative_prior = {"Low Severity": uninformative_prior, "Medium Severity": uninformative_prior, "High Severity": uninformative_prior}
-    initial_distribution = np.array([0.5, 0.4, 0.1]) #in order of low severity change, medium, high
 
 
     these_Dirichlets, these_categories = build_Dirichlet(uninformative_prior, built_histograms)
