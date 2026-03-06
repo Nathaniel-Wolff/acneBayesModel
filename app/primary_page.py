@@ -3,12 +3,12 @@ import streamlit as st
 from matplotlib import pyplot as plt
 import json
 import numpy as np
-from src.acne_model import data_parsing, model_building
+from acne_model import data_parsing, model_building
 from scipy.stats import beta
-from src.acne_model.model import state_evolution_vv as evolution_function
-from src.acne_model.model import reparameterize
-from src.acne_model.model import map_latent_states_to_probs as severity_distribution_function
-from src.acne_model.model import compute_cluster_dirichlets, assign_label, adjust_empirical_kernel
+from acne_model.model import state_evolution_vv as evolution_function
+from acne_model.model import reparameterize
+from acne_model.model import map_latent_states_to_probs as severity_distribution_function
+from acne_model.model import compute_cluster_dirichlets, assign_label, adjust_empirical_kernel
 from collections import defaultdict
 
 st.title("Acne Severity Analysis")

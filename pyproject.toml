@@ -5,6 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "Acne-Model-Package"
 version = "0.0.1"
+packages = [
+    { include = "acne_model", from = "src" }
+]
 description = "Acne Severity Modeling/Analysis for Clinical Decision Making Support"
 authors = [
   { name="Nathaniel Wolff", email="nathanielwolff1818@gmail.com" }
