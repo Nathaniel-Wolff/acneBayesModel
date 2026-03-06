@@ -19,6 +19,8 @@ This allows evaluation of the efficacy of different treatment strategies through
 
 ## Approach
 
+### Data Processing and Exploratory Analysis
+
 1. **Severity Score Normalization, KDE Binning, & Bootstrapping:**
    - Normalized longitudinal severity measurements and discretized them into 3 interpretable states using probability-density based binning.
    - Verified binning robustness with bootstrapping. 
@@ -39,12 +41,19 @@ This allows evaluation of the efficacy of different treatment strategies through
 4. **Fitting of State-Space/Statistical Mechanistic Model, Optimization of Parameters with Expectation-Maximization/Generalized EM Algorithm**
    - Developed a latent-state mechanistic model of outcome severity, incorporating bacterial load, inflammation, and sebum production.
    - Optimized parameters with an Expectation-Maximization / Generalized EM (EM/GEM) approach.
+   - Also optimized Transition Kernels (First Order Markov Chain Approximation) between severity change states for use in simulation. 
    
    *This model enabled direct testing of potential treatment regimes for outcome efficacy and cost-optimization.
    Model equations and EM/GEM implementation can be found in the corresponding Jupyter Notebook.*
 
    *Latent dynamics parameters are fixed at a representative maximum likelihood estimate due to structural non-identifiability given available data. 
    Future versions of the model will introduce biologically informed priors.*
+
+### Clinical Outcome Simulation Mode
+  - Used clustering (K-Means) to define mapping from latent states to Dirichlet posteriors. 
+  - Implemented Beam Search algorithm to select the top n Severity Change State trajectories in order of log likelihood.
+  - Defined Streamlit UI allowing users to input treatment trajectory, initial latent state, and initial Acne Severity, displaying the top n top n Severity Change State trajectories and expected trajectory. 
+
 
 ## Applications
 
@@ -60,24 +69,20 @@ This allows evaluation of the efficacy of different treatment strategies through
 
 ## Next Steps
 
-1. **Simulation Mode:**
-  - Build synthetic patient models to simulate long-term treatment strategies.
-  - Create a patient-facing interface to explore probabilities of improvement over time, supporting adherence and motivation. 
-
-2. **Omics Integration:**
+1. **Omics Integration:**
   - Incorporate biochemical signatures of inflammation into the state-space model to refine predictions.  
 
-3. **Demographic Analysis:**
+2. **Demographic Analysis:**
   - Examine treatment responses across age, background, and geographic cohorts.
 
-4. **LLM Integration:**
+3. **LLM Integration:**
   - Integrate LLM tools to automate annotations, planning, and report generation for patients and clinicians.
 
 
 
 **Author:** Nathaniel Wolff
 **Contact:** [nathanielwolff1818@gmail.com; https://github.com/Nathaniel-Wolff]  
-**Status:** 6th draft complete, Simulation Mode in progress. 
-**Date Updated:** 01-09-2026  
+**Status:** 7th draft complete, Model Advancement in progress. 
+**Date Updated:** 03-05-2026  
 
 
