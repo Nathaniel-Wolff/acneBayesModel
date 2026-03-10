@@ -6,12 +6,13 @@ import numpy as np
 from collections import defaultdict
 import statsmodels.api as sm
 from scipy.stats import dirichlet
+from scipy.stats import invwishart, multivariate_normal
 from scipy.spatial import distance_matrix
 from scipy.stats import norm
 from sklearn.cluster import KMeans
 from functools import partial
 
-def fit_predictive_linear_regression_model_of_severity(metadata_dfs):
+def old_unused_fit_predictive_linear_regression_model_of_severity(metadata_dfs):
     """Function to fit a predictive linear model of acne severity as a function of:
     1) Lagged/previous day's severity; 2/3) Cumulative days of the current treatment (in this case, either antibiotics or cream)
     4) Synergistic effect of cream being followed by a certain number of days of antibiotics.
@@ -79,12 +80,49 @@ def fit_predictive_linear_regression_model_of_severity(metadata_dfs):
     fitted_model = sm.OLS(severity_change, history_vectors_of_independent_vars).fit()
 
 
+def fit_bayesian_multivar_linear_model(design_matrix, imputed_biomarkers_matrix, prior_scale_matrix_columns, prior_coeff_vector_mean, prior_scale_matrix_rows, x):
+    """Solves for the multivariate normal distribution between imputed biomarker vectors and observed clinical biomarkers.
+    Priors for covariance between components, between observed imputed biomarkers pairwise, and
+    coefficient matrices can be specified, otherwise uniformative priors are used. """
+
+    #Moore-Penrose Pseudoinverse
+    coefficient_matrix_estimate = np.linalg.pinv(design_matrix) @ imputed_biomarkers_matrix
+
+    #Closed Form Likelihood Solution
+    #using the typical Inverse Wishart Prior for error covariance matrix, and Normal prior for coefficient matrix
+    noise_norm_cov_matrix_prior = invwishart(df = prior_scale_matrix_columns.ndim, scale = prior_scale_matrix_columns) #need to do a literature search about scale matrix covariance
+    coefficient_matrix_prior = multivariate_normal(x = x, cov = np.kron(noise_norm_cov_matrix_prior, np.linalg.inv(prior_scale_matrix_rows)))
+
+   #posterior_coeff_matrix = [] #mental note: write out the posterior params based on the formula and the parameters here
+
+    #lamda n, beta n, dof n, scale n
+    cov_matrix_rows_post = design_matrix @ design_matrix.T + prior_scale_matrix_rows
+    coefficient_matrix_post = np.lingalg.inv(cov_matrix_rows_post) @ (design_matrix.T @ imputed_biomarkers_matrix + prior_scale_matrix_rows @ prior_coeff_vector_mean)
+    dof_post = x
+    scale_matrix_post = prior_scale_matrix_columns + (imputed_biomarkers_matrix - design_matrix@coefficient_matrix_post).T @ (imputed_biomarkers_matrix - design_matrix@coefficient_matrix_post)
+    + (coefficient_matrix_post - prior_coeff_vector_mean).T @ prior_scale_matrix_rows @ (coefficient_matrix_post - prior_coeff_vector_mean)
+
+    first_layer_params = {"cov_matrix_rows_post": cov_matrix_rows_post, "coefficient_matrix_post": coefficient_matrix_post,
+              "scale_matrix_post": scale_matrix_post, "dof_post": dof_post}
+
+    #mental note - use the simple Moore-Penrose psuedoinverse to code this in. I think you might already have the funcion?
+    #but use a different prior unless applicable...might be good to write things out explicityly.
+
+    return first_layer_params
+
 def gaussian(std_dev, mean, dof):
     """Implementation of Gaussian function for below use."""
     coefficient = 1 / (std_dev * np.sqrt(2 * np.pi))
     exponent = -((dof - mean) ** 2) / (2 * std_dev ** 2)
     return coefficient * np.exp(exponent)
-def biomarkers_to_latent_state(c_insulin, c_IGF1, pH, ph_dependent_enzymes, ideal_microbiome_dist, params, gaussian_params, last_state):
+
+
+def biomarkers_to_latent_state(c_insulin, c_IGF1, c_bulk_androgen, pH, ph_dependent_enzymes, patient_nlr, ideal_microbiome_dist, params, gaussian_params, last_state):
+
+
+    #Bayesian Multivariate Linear Model of mTORC1 activity, lipase-dependent microbiome dysbiosis, and LTB4 activity
+    #Using nonlinear basis (Hill functions for receptor occupancy, correlation between bulk androgen and IGF1 concentrations)
+    #Later Jacobian-based linearization (in functions below) will be used, but straight linearity is sufficient for POC
     K_d_insulin = .0001 #in Molar
     K_d_IGF1 = .00001 #in Molar
 
@@ -99,14 +137,13 @@ def biomarkers_to_latent_state(c_insulin, c_IGF1, pH, ph_dependent_enzymes, idea
     else:
         gaussian_output = np.sum([gaussian(std_dev=this_std, mean=this_mean, dof= pH) for this_std, this_mean in gaussian_params])
 
-    mTORC1_activity = params["insulin_constant"] * (c_insulin/(c_insulin + K_d_insulin)) + params["IFG1_constant"]*(c_IGF1/(c_IGF1 + K_d_IGF1))
-    bac_dybiosis_measure = 1.23 #hardcoded for testing at this time
-    bac_dysbiosis_lipase_effect = params["lipase_kinetics_constant"] * gaussian_output * bac_dybiosis_measure * last_bacterial
+    mTORC1_activity = params["insulin_constant"] * (c_insulin/(c_insulin + K_d_insulin)) + params["IFG1_constant"]*(c_IGF1/(c_IGF1 + K_d_IGF1)) + params["bulk_androgen_IGF1 interaction"] * ((c_IGF1*c_bulk_androgen) / (c_IGF1 + K_d_IGF1) )
+    lipase_dependent_dysbiosis_measure = params["lipase_kinetics_constant"] * gaussian_output #should inherently account for bacterial quantities
+    ltb4_activity = params["NLR_constant"] * patient_nlr
 
-    next_bacterial_state = last_bacterial + params["bac_dysbiosis_rate"] * bac_dybiosis_measure
-    next_inflammation = None
-    next_sebum_production_rate = last_sebum + params["mTORC1_constant"] * mTORC1_activity + params["bac_dysbiosis_constant"] * bac_dysbiosis_lipase_effect
+    imputed_biomarkers_vector = np.array([mTORC1_activity, lipase_dependent_dysbiosis_measure, ltb4_activity])
 
+    return imputed_biomarkers_vector
 
 
 

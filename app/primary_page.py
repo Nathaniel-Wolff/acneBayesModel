@@ -2,15 +2,16 @@
 
 import sys
 from pathlib import Path
-
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 
-
+import requests
+from io import StringIO
 import streamlit as st
 from matplotlib import pyplot as plt
 import json
 import numpy as np
+import pandas as pd
 from acne_model import data_parsing, model_building
 from scipy.stats import beta
 from acne_model.model import state_evolution_vv as evolution_function
@@ -23,6 +24,22 @@ st.title("Acne Severity Analysis")
 st.set_page_config(layout = "wide")
 
 #calling the model with test dataset
+
+def fetch_default_datasets(this_url, constants_pointer):
+    try:
+        response = requests.get(this_url)
+        response.raise_for_status() #for bad requests
+
+        if "text/csv" in response.headers.get("content-type", ""):
+            data = StringIO(response.text)
+            df = pd.read_csv(data)
+            return df
+        else:
+            st.error("The content from the URL is not a CSV file. Please try again.")
+            return None
+    except requests.exceptions.RequestException as e:
+        st.error("Data not fetched. Requested url: {}".format(e))
+
 def calling_model(this_raw_data_name, json_name):
     data_returns = data_parsing(this_raw_data_name)
     these_averages = data_returns[5]
@@ -412,6 +429,9 @@ def main():
         st.session_state.commit_requested = True
 
     build_trajectory()
+
+    input_file = st.text_input("Type the url where you are trying to get your data from.")
+
 
     this_called_model, these_deltas, observed_dirichlets, ob_empirical_matrices, ob_raw_counts = calling_model("sim_acne.csv", "initial_constants.json")
     st.session_state.these_deltas = these_deltas
