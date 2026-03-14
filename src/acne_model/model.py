@@ -80,10 +80,13 @@ def old_unused_fit_predictive_linear_regression_model_of_severity(metadata_dfs):
     fitted_model = sm.OLS(severity_change, history_vectors_of_independent_vars).fit()
 
 
-def fit_bayesian_multivar_linear_model(design_matrix, imputed_biomarkers_matrix, prior_scale_matrix_columns, prior_coeff_vector_mean, prior_scale_matrix_rows, x):
+def layer_1_bml_observable_biomarkers(design_matrix, imputed_biomarkers_matrix, prior_scale_matrix_columns, prior_scale_matrix_rows, x):
     """Solves for the multivariate normal distribution between imputed biomarker vectors and observed clinical biomarkers.
     Priors for covariance between components, between observed imputed biomarkers pairwise, and
-    coefficient matrices can be specified, otherwise uniformative priors are used. """
+    coefficient matrices can be specified, otherwise uniformative priors are used."""
+
+    #mental note: need to decide if parsing of raw df into design and imputed biomarkers matrices should be done here or in the raw data analysis function
+    #also need to check the math here to see if it is accurate especially the fact the prior B matrix isn't used
 
     #Moore-Penrose Pseudoinverse
     coefficient_matrix_estimate = np.linalg.pinv(design_matrix) @ imputed_biomarkers_matrix
@@ -93,32 +96,22 @@ def fit_bayesian_multivar_linear_model(design_matrix, imputed_biomarkers_matrix,
     noise_norm_cov_matrix_prior = invwishart(df = prior_scale_matrix_columns.ndim, scale = prior_scale_matrix_columns) #need to do a literature search about scale matrix covariance
     coefficient_matrix_prior = multivariate_normal(x = x, cov = np.kron(noise_norm_cov_matrix_prior, np.linalg.inv(prior_scale_matrix_rows)))
 
-   #posterior_coeff_matrix = [] #mental note: write out the posterior params based on the formula and the parameters here
-
     #lamda n, beta n, dof n, scale n
     cov_matrix_rows_post = design_matrix @ design_matrix.T + prior_scale_matrix_rows
-    coefficient_matrix_post = np.lingalg.inv(cov_matrix_rows_post) @ (design_matrix.T @ imputed_biomarkers_matrix + prior_scale_matrix_rows @ prior_coeff_vector_mean)
+    coefficient_matrix_post = np.lingalg.inv(cov_matrix_rows_post) @ (design_matrix.T @ imputed_biomarkers_matrix + prior_scale_matrix_rows @ coefficient_matrix_prior)
     dof_post = x
     scale_matrix_post = prior_scale_matrix_columns + (imputed_biomarkers_matrix - design_matrix@coefficient_matrix_post).T @ (imputed_biomarkers_matrix - design_matrix@coefficient_matrix_post)
-    + (coefficient_matrix_post - prior_coeff_vector_mean).T @ prior_scale_matrix_rows @ (coefficient_matrix_post - prior_coeff_vector_mean)
+    + (coefficient_matrix_post - coefficient_matrix_prior).T @ prior_scale_matrix_rows @ (coefficient_matrix_post - coefficient_matrix_prior)
 
     first_layer_params = {"cov_matrix_rows_post": cov_matrix_rows_post, "coefficient_matrix_post": coefficient_matrix_post,
               "scale_matrix_post": scale_matrix_post, "dof_post": dof_post}
 
-    #mental note - use the simple Moore-Penrose psuedoinverse to code this in. I think you might already have the funcion?
-    #but use a different prior unless applicable...might be good to write things out explicityly.
 
     return first_layer_params
 
-def gaussian(std_dev, mean, dof):
-    """Implementation of Gaussian function for below use."""
-    coefficient = 1 / (std_dev * np.sqrt(2 * np.pi))
-    exponent = -((dof - mean) ** 2) / (2 * std_dev ** 2)
-    return coefficient * np.exp(exponent)
-
-
-def biomarkers_to_latent_state(c_insulin, c_IGF1, c_bulk_androgen, pH, ph_dependent_enzymes, patient_nlr, ideal_microbiome_dist, params, gaussian_params, last_state):
-
+def layer_2_imputed_biomarkers_multivar_model(c_insulin, c_IGF1, c_bulk_androgen, pH, ph_dependent_enzymes, patient_nlr, ideal_microbiome_dist, first_layer_params, gaussian_params, last_state, priors):
+    """Fits layer 2 of the imputed biomarker multivariate model. Implements one iteration of EM."""
+    # ends with learning the relative contributions of the imputed biomarkers to total bacterial dysbiosis, total sebum production, total inflammation
 
     #Bayesian Multivariate Linear Model of mTORC1 activity, lipase-dependent microbiome dysbiosis, and LTB4 activity
     #Using nonlinear basis (Hill functions for receptor occupancy, correlation between bulk androgen and IGF1 concentrations)
@@ -137,14 +130,60 @@ def biomarkers_to_latent_state(c_insulin, c_IGF1, c_bulk_androgen, pH, ph_depend
     else:
         gaussian_output = np.sum([gaussian(std_dev=this_std, mean=this_mean, dof= pH) for this_std, this_mean in gaussian_params])
 
-    mTORC1_activity = params["insulin_constant"] * (c_insulin/(c_insulin + K_d_insulin)) + params["IFG1_constant"]*(c_IGF1/(c_IGF1 + K_d_IGF1)) + params["bulk_androgen_IGF1 interaction"] * ((c_IGF1*c_bulk_androgen) / (c_IGF1 + K_d_IGF1) )
-    lipase_dependent_dysbiosis_measure = params["lipase_kinetics_constant"] * gaussian_output #should inherently account for bacterial quantities
-    ltb4_activity = params["NLR_constant"] * patient_nlr
+    mTORC1_activity = first_layer_params["insulin_constant"] * (c_insulin/(c_insulin + K_d_insulin)) + first_layer_params["IFG1_constant"]*(c_IGF1/(c_IGF1 + K_d_IGF1)) + first_layer_params["bulk_androgen_IGF1 interaction"] * ((c_IGF1*c_bulk_androgen) / (c_IGF1 + K_d_IGF1) )
+    lipase_dependent_dysbiosis_measure = first_layer_params["lipase_kinetics_constant"] * gaussian_output #should inherently account for bacterial quantities
+    ltb4_activity = first_layer_params["NLR_constant"] * patient_nlr
 
     imputed_biomarkers_vector = np.array([mTORC1_activity, lipase_dependent_dysbiosis_measure, ltb4_activity])
 
-    return imputed_biomarkers_vector
+    #log likelihood moment calculation
+    this_last_observables_cov = priors["last_observables_cov"]
+    this_last_mean = priors["last_mean"]
+    posterior_mean_imputed, posterior_second_moment_imputed = compute_log_likelihood_terms(last_observables_cov=this_last_observables_cov,
+                                                                                           last_mean=this_last_mean, design_matrix=imputed_biomarkers_vector, first_layer_params = first_layer_params)
+    mean_maximized, cov_matrix_maximized = full_maximization_step_HBM(usable_posterior_mean = posterior_mean_imputed, usable_posterior_second_moment_matrix = posterior_second_moment_imputed,
+                                                                      design_matrix=imputed_biomarkers_vector, n = imputed_biomarkers_vector.shape[1])
 
+    return posterior_mean_imputed, posterior_second_moment_imputed
+
+def compute_log_likelihood_terms(last_observables_cov, last_mean, design_matrix, first_layer_params):
+    here_coeff_matrix = first_layer_params["coefficient_matrix_post"]
+    here_scale_matrix = first_layer_params["scale_matrix_post"]
+
+    posterior_cov_matrix = np.linalg.inv(np.linalg.inv(last_observables_cov) + here_coeff_matrix.T @ np.linalg.inv(here_scale_matrix) @here_coeff_matrix)
+
+    posterior_mean = posterior_cov_matrix @ (np.linalg.inv(last_observables_cov) @ last_mean + here_coeff_matrix.T @ np.linalg.inv(here_scale_matrix) @ design_matrix )
+    posterior_second_moment_matrix = posterior_cov_matrix + posterior_mean @ posterior_mean.T
+
+    #likelihood = multivariate_normal(mean=posterior_mean, cov=posterior_cov_matrix)/last_latent_state_dis
+    # x = 1 #placeholder
+    # complete_data_log_likelihood = 0
+    # for row in design_matrix.T:
+    #     likelihood = -1/2 * ( (row - posterior_mean).T @ np.linalg.inv(posterior_cov_matrix) @ (row - posterior_mean) + np.linalg.det(posterior_cov_matrix))
+    #     complete_data_log_likelihood += likelihood
+
+    return posterior_mean, posterior_second_moment_matrix
+
+
+def full_maximization_step_HBM(usable_posterior_mean, usable_posterior_second_moment_matrix, design_matrix, n):
+    """Function that optimizes Gaussian complete-data likelihood (posterior) in closed form with the first two moments
+    of the posterior. Used in layer 2 of the full HBM."""
+    maximized_mean = (design_matrix @ usable_posterior_mean.T) @ np.linalg.inv((usable_posterior_second_moment_matrix))
+    maximized_cov_matrix = 1/n * (design_matrix @ design_matrix.T
+                                  - maximized_mean @ usable_posterior_mean @ design_matrix.T
+                                  - design_matrix @ usable_posterior_mean.T @ maximized_mean.T
+                                  + maximized_mean @ usable_posterior_second_moment_matrix @ maximized_mean.T)
+    return maximized_mean, maximized_cov_matrix
+
+def layer_3_latent_state_severity_mapping(latent_states):
+    mapping = 0
+    #ends with learning the manifold from latent state to acne severity distribution for pdf work
+
+def gaussian(std_dev, mean, dof):
+    """Implementation of Gaussian function for below use."""
+    coefficient = 1 / (std_dev * np.sqrt(2 * np.pi))
+    exponent = -((dof - mean) ** 2) / (2 * std_dev ** 2)
+    return coefficient * np.exp(exponent)
 
 
 def reparameterize(model_params):
@@ -239,8 +278,6 @@ def state_evolution_vv(v_t_last, params, history, raw_distribution, severity_del
     cur_sebum = np.clip(cur_sebum, 0, 10)
 
     return np.array([cur_bac, cur_inf, cur_sebum]), tstd_term, days_antib, was_cream_used
-
-
 
 
 def log_prior_reparam(params, priors={
@@ -798,6 +835,17 @@ def fit_latent_state_space_model(empirical_counts, empirical_kernels, initial_pa
                              "scoring_trans_row 2": model_config.get("scoring_trans_row 2"), "biases_trans_row 2": model_config.get("biases_trans_row 2")}
 
     return v_predictions, standard_params, converged_hyperparams
+
+def fit_HBM_model(all_frames, model_config, max_iterations = 20):
+
+
+    ##----Initialization of all model constants from model config
+
+
+
+    for em_iteration in max_iterations:
+        pass
+
 def model_building(these_empirical_counts, these_empirical_kernels, these_initial_params, raw_distributions, severity_deltas, model_config):
     """Function that contains all the models fit to the observed data."""
     reparameterized = reparameterize(these_initial_params)

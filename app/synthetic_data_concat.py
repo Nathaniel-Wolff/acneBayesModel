@@ -92,9 +92,6 @@ def generate_HBM_extra_columns():
                'Bulk Androgen Conc.', 'NLR', 'mTORC1 Conc.', 'Dysbiosis', 'LKB4 Conc.']
     df = pd.DataFrame(data, columns=columns)
 
-    # Output first few rows to verify
-    #print(df.head(15))
-
     return df
 
 def concat_all_csv(other_csv_filename, other_df, out_name):
