@@ -39,7 +39,6 @@ def fetch_default_datasets(this_url, constants_pointer):
             return None
     except requests.exceptions.RequestException as e:
         st.error("Data not fetched. Requested url: {}".format(e))
-
 def calling_model(this_raw_data_name, json_name):
     data_returns = data_parsing(this_raw_data_name)
     these_averages = data_returns[5]
@@ -178,7 +177,6 @@ def extend_and_prune_trajectories(actual_trajectories, the_transition_matrices, 
     else:
         actual_trajectories = [([m], initial_distribution[m]) for m in range(3)] #initialize probabilities from initial distribution
         return actual_trajectories
-
 def beam_search_trajectories(
         trajectory,
     transition_matrices, severity_deltas, initial_severity = 1.0,

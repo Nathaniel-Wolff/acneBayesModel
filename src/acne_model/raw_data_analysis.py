@@ -48,29 +48,27 @@ def seperate_patients(raw_data):
     return seperatePatientsDFs, allPatientsIntroDays
 
 
-def normalize_dataframe_w_baseline(dataframe, end_column_index, end_index):
+def normalize_dataframe_w_baseline(dataframe, start_column_index, end_column_index, end_index):
     """Function for quick normalization of multiple dataframe columns relative to baseline, as used below."""
     the_dataframe = dataframe.copy()
-
-    unnormalized_part = the_dataframe.iloc[:, :end_column_index + 1]
-    normalized_part = the_dataframe.iloc[:, end_column_index + 1:].copy()
+    beginning = the_dataframe.iloc[:, 0:start_column_index]
+    normalized_part = the_dataframe.iloc[:, start_column_index:end_column_index + 1]
+    last_part = the_dataframe.iloc[:, end_column_index+1:].copy()
 
     baseline_means = normalized_part.iloc[:end_index, :].mean()
     normalized_part = ((normalized_part - baseline_means) / baseline_means) * 100
+    remerged = pd.concat([beginning, normalized_part], axis=1)
+    last_remerged = pd.concat([remerged, last_part], axis=1)
 
-    remerged = pd.concat([unnormalized_part, normalized_part], axis=1)
 
-
-    return remerged
+    return last_remerged
 def add_history_metadata(seperatePatientsDFs, allPatientsIntroDays):
     """Function that adds a treatment history metadata column to each patient's dataframe by...
     1) Loading each seperate patient's dataframe and compute the average baseline severity, normalizing acne severity scores. Then modifies the dataframe, called a severities dataframe.
     2) For each, mapping each value for treatment to a treatment history tuple. It is a tuple of the form ((days of treatment, ai), (days of treatment, ai+1),....(days of treatment, an))
     where n is the row number of the current day of the particular treatment."""
-    #initializing dict containing severties by day for a given treatment 
-    severitiesDayTreatmentDict = {treatment: None for treatment in seperatePatientsDFs[0]["treatment"]}
+    #initializing dict containing severties by day for a given treatment
     modifiedDFs = []
-    other_modified_DFs = []
     history_distributions = defaultdict(list)
     av_baselines = []
     counter = 0
@@ -80,22 +78,12 @@ def add_history_metadata(seperatePatientsDFs, allPatientsIntroDays):
         #computing average baseline severity for each DF
         average_bl_severity = patient_DF["AcneSeverity"].head(days_of_intro[0][2]).mean()
 
-        average_bls_insulin = patient_DF["Insulin Conc."].head(days_of_intro[0][2]) #changing this later might be needed if the distribution isn't normal (goodness of fit test? check mean and variance?)
-        average_bls_IGF1 =  patient_DF["IGF1 Conc."].head(days_of_intro[0][2])
-        average_bls_pH = patient_DF["Skin pH"].head(days_of_intro[0][2])
-        average_bls_androgen = patient_DF["Bulk Androgen Conc."].head(days_of_intro[0][2])
-        average_bls_NLR = patient_DF["NLR"].head(days_of_intro[0][2])
-
-
         av_baselines.append(average_bl_severity)
 
         #forming new dataframe from old one containing percent severity over baseline
         #now modified to do the same for all observables and imputed biomarkers
         modified_DF = patient_DF.copy()
-
-
-        #modified_DF["AcneSeverity"] = modified_DF["AcneSeverity"].apply(lambda x: (x - average_bl_severity)/average_bl_severity)*100
-        new_one = normalize_dataframe_w_baseline(dataframe = modified_DF, end_column_index = 5, end_index = days_of_intro[0][2])
+        new_one = normalize_dataframe_w_baseline(dataframe = modified_DF, start_column_index= 7, end_column_index = 12, end_index = days_of_intro[0][2])
         
         modifiedDFs.append(new_one)
         counter += 1
@@ -132,12 +120,12 @@ def add_history_metadata(seperatePatientsDFs, allPatientsIntroDays):
                 treatment_history[-1] = (current_treatment, treatment_days[current_treatment])
 
             #once history is built, the history is stored in the original dataframe as an entry in own column
-            severities_df.at[row_index, "treatment_history"] = list(treatment_history)
             transient_history = treatment_history.copy()
             history_distributions[tuple(transient_history)].append(current_severity)
             all_treatment_histories.append(transient_history)
             last_treatment_itself = current_treatment  
-            
+
+        severities_df["treatment_history"] = all_treatment_histories
         #also modifying dataframes to remove baseline acne severities, as they've already been used
         metadata_DFs.append(severities_df[days_of_intro[0][2]:])
         all_patients_treatment_histories.append(all_treatment_histories)
@@ -157,7 +145,6 @@ def find_and_plot_severity_states(metadata_DFs):
     kde_pdf = sp.stats.gaussian_kde(all_severities)
 
     # using max and min of pdf to find saddle point in between 2 modes, sampling 1000 points
-    severity_grid = np.linspace(np.min(all_severities), np.max(all_severities), 1000)
     neg_kde = lambda x: -kde_pdf(x.reshape(1, -1))
     # finding the two main modes using optimization, with first 2 mode guesses at the .2 and .8 quantiles
     guesses = np.percentile(all_severities, [20, 80])
@@ -344,9 +331,6 @@ def build_transition_kernel(dirichlet):
 
         initial_kernel = np.vstack(tuple(kernel_list))
 
-
-        initial_kernel = np.vstack(tuple(kernel_list))
-
     return initial_kernel
 
 def build_transition_kernels(dirichlet_prior, dirichlets):
@@ -369,7 +353,6 @@ def data_parsing(data_filename):
     this_seperate_DFs, this_intro_days = seperate_patients(raw_data)
     # this_inspected_data = display_plots_of_dataset(this_seperate_DFs, this_intro_days, .1) #for inspection
     this_md_DFs, this_treatment_history, these_history_distributions, these_baselines = add_history_metadata(this_seperate_DFs, this_intro_days)
-    print(these_baselines)
     these_states, these_ranges = find_and_plot_severity_states(this_md_DFs)
     these_assigned_md_DFs, these_state_averages = assign_states_to_mdfs(this_md_DFs, these_states, these_ranges)
 
