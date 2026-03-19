@@ -1,5 +1,8 @@
 {"Prior_Mean": 0,
 "Prior_Precision": 1e-1,
   "Prior_Scale": 1,
-  "DOF": 4
+  "DOF": 4,
+  "Prior_2nd_Covariance": 1e-1,
+  "State_Matrix_OU": 1e-1,
+  "Wiener_Matrix_OU": 1e-1
 }
