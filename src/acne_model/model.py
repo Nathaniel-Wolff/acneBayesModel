@@ -117,10 +117,10 @@ def layer_1_bml_observable_biomarkers(design_matrix, imputed_biomarkers_matrix, 
     post_dof = dof + len(post_mean_matrix.T)
 
     first_layer_params = {"precision_matrix": post_precision_matrix_converted, "post_mean_matrix": post_mean_matrix_converted,
-              "post_scale_matrix": post_scale_matrix_converted, "post_dof": post_dof, "design_matrix": design_matrix}
+              "post_scale_matrix": post_scale_matrix_converted, "post_dof": post_dof, "design_matrix": design_matrix, "imputed_biomarkers_matrix": imputed_biomarkers_matrix}
 
     return first_layer_params
-def layer_2_imputed_biomarkers_multivar_model(first_layer_params, this_last_observables_cov, ou_priors):
+def layer_2_imputed_biomarkers_multivar_model(first_layer_params, this_last_observables_cov, this_last_mean, this_last_coeff_matrix, ou_matrices):
     """Fits layer 2 of the imputed biomarker multivariate model. Implements one iteration of EM."""
     # ends with learning the relative contributions of the imputed biomarkers to total bacterial dysbiosis, total sebum production, total inflammation
 
@@ -129,52 +129,77 @@ def layer_2_imputed_biomarkers_multivar_model(first_layer_params, this_last_obse
     #Later Jacobian-based linearization (in functions below) will be used, but straight linearity is sufficient for POC
 
     usable_design_matrix = first_layer_params["design_matrix"]
-    usable_mean = first_layer_params["post_mean_matrix"]
+    #usable_mean = first_layer_params["post_mean_matrix"]
+    usable_imputeds_matrix = first_layer_params["imputed_biomarkers_matrix"]
 
     #---Expectation Step
     posterior_mean_imputed, posterior_second_moment_imputed = compute_log_likelihood_terms(last_observables_cov=this_last_observables_cov,
-                                                                                               last_mean=usable_mean, design_matrix=usable_design_matrix, first_layer_params = first_layer_params)
+                                                                                               last_mean=this_last_mean, last_coeff_matrix=this_last_coeff_matrix, imputed_biomarkers_matrix=usable_imputeds_matrix, first_layer_params = first_layer_params)
     #---Maximization Step
     mean_maximized, cov_matrix_maximized = full_maximization_step_HBM(usable_posterior_mean = posterior_mean_imputed, usable_posterior_second_moment_matrix = posterior_second_moment_imputed,
-                                                                      design_matrix=usable_design_matrix, n = usable_design_matrix.shape[1])
-    #---Computation of Ornstein Uhlenbeck RV, indexed by its continous Lyanpunov equation solution matrix
-    this_OU_State_Matrix_const = ou_priors["State_Matrix_OU"]
-    this_OU_State_Matrix = this_OU_State_Matrix_const * np.identity()
+                                                                      design_matrix=usable_design_matrix, n = usable_design_matrix.shape[1], imputed_biomarkers_matrix=usable_imputeds_matrix)
 
-    this_OU_Weiner_Matrix_const = ou_priors["Wiener_Matrix_OU"]
+    #---Computation of Ornstein Uhlenbeck RV, indexed by its continous Lyanpunov equation solution matrix
+    this_OU_State_Matrix_const = ou_matrices["State_Matrix_OU"]
+    this_OU_State_Matrix = this_OU_State_Matrix_const * np.identity() 
+
+    this_OU_Weiner_Matrix_const = ou_matrices["Wiener_Matrix_OU"]
     this_OU_Weiner_Matrix = this_OU_Weiner_Matrix_const * np.identity()
-    #
+    #mental note: make sure covariance matrix for second normal is initialized and also the ones for the OU processes above
     this_OU_index_matrix = multivar_Ornstein_Uhlenbeck(state_matrix=this_OU_State_Matrix, weiner_matrix=this_OU_Weiner_Matrix)
 
-    return mean_maximized, cov_matrix_maximized, this_OU_index_matrix
+    final_cov_matrix_maximized = cov_matrix_maximized + this_OU_index_matrix
 
-def compute_log_likelihood_terms(last_observables_cov, last_mean, design_matrix, first_layer_params):
-    here_coeff_matrix = first_layer_params["coefficient_matrix_post"]
-    here_scale_matrix = first_layer_params["scale_matrix_post"]
+    return mean_maximized, final_cov_matrix_maximized, this_OU_index_matrix
 
-    posterior_cov_matrix = np.linalg.inv(np.linalg.inv(last_observables_cov) + here_coeff_matrix.T @ np.linalg.inv(here_scale_matrix) @here_coeff_matrix)
+def compute_log_likelihood_terms(last_observables_cov, last_mean, last_coeff_matrix, imputed_biomarkers_matrix, first_layer_params):
 
-    posterior_mean = posterior_cov_matrix @ (np.linalg.inv(last_observables_cov) @ last_mean + here_coeff_matrix.T @ np.linalg.inv(here_scale_matrix) @ design_matrix )
-    posterior_second_moment_matrix = posterior_cov_matrix + posterior_mean @ posterior_mean.T
+    here_scale_matrix = first_layer_params["post_scale_matrix"]
 
-    #likelihood = multivariate_normal(mean=posterior_mean, cov=posterior_cov_matrix)/last_latent_state_dis
-    # x = 1 #placeholder
-    # complete_data_log_likelihood = 0
-    # for row in design_matrix.T:
-    #     likelihood = -1/2 * ( (row - posterior_mean).T @ np.linalg.inv(posterior_cov_matrix) @ (row - posterior_mean) + np.linalg.det(posterior_cov_matrix))
-    #     complete_data_log_likelihood += likelihood
 
-    return posterior_mean, posterior_second_moment_matrix
+    inv_prior_cov = np.linalg.inv(last_observables_cov)
+    precision_from_obs = last_mean.T @ np.linalg.inv(here_scale_matrix) @ last_mean
 
-def full_maximization_step_HBM(usable_posterior_mean, usable_posterior_second_moment_matrix, design_matrix, n):
+    posterior_cov_matrix = np.linalg.inv(inv_prior_cov + precision_from_obs)
+    posterior_cov_matrix = (posterior_cov_matrix @ posterior_cov_matrix.T)/2 #forcing symmetry to avoid singularity
+
+    #avoiding batched update in favor of a unique latent state for each observation, as with data driven version
+    #Updating 2nd Moment Matrix accordingly, forcing symmetry to avoid singularity
+    transposed_imputeds = imputed_biomarkers_matrix.T
+    data_contribution = last_coeff_matrix.T @ np.linalg.inv(here_scale_matrix) @ transposed_imputeds
+    last_mean_vector = np.mean(last_mean, axis=1, keepdims=True)
+    #print(posterior_cov_matrix.shape, last_observables_cov.shape, last_mean.shape, data_contribution.shape) #what is worng here
+
+    posterior_mean = posterior_cov_matrix @ ((np.linalg.inv(last_observables_cov) @ last_mean) + data_contribution)
+
+    mu = np.asarray(posterior_mean)
+    N = mu.shape[1]
+    sum_outer_products = mu @ mu.T
+    total_second_moment_matrix = posterior_cov_matrix + (sum_outer_products / N)
+    total_second_moment_matrix = (total_second_moment_matrix + total_second_moment_matrix.T) / 2
+
+    return posterior_mean, total_second_moment_matrix
+
+def full_maximization_step_HBM(usable_posterior_mean, usable_posterior_second_moment_matrix, design_matrix, imputed_biomarkers_matrix, n):
     """Function that optimizes Gaussian complete-data likelihood (posterior) in closed form with the first two moments
     of the posterior. Used in layer 2 of the full HBM."""
-    maximized_mean = (design_matrix @ usable_posterior_mean.T) @ np.linalg.inv((usable_posterior_second_moment_matrix))
-    maximized_cov_matrix = 1/n * (design_matrix @ design_matrix.T
-                                  - maximized_mean @ usable_posterior_mean @ design_matrix.T
-                                  - design_matrix @ usable_posterior_mean.T @ maximized_mean.T
-                                  + maximized_mean @ usable_posterior_second_moment_matrix @ maximized_mean.T)
-    return maximized_mean, maximized_cov_matrix
+    #stripping any Pandas column names in case of issues
+    X = design_matrix.values if hasattr(design_matrix, 'values') else design_matrix
+    mu = usable_posterior_mean.values if hasattr(usable_posterior_mean, 'values') else usable_posterior_mean
+    S = usable_posterior_second_moment_matrix.values if hasattr(usable_posterior_second_moment_matrix,
+                                                                'values') else usable_posterior_second_moment_matrix
+
+    W = (X.T @ mu.T) @ np.linalg.inv(S) #maximized weights
+    n = X.shape[0]
+
+    Y = imputed_biomarkers_matrix.values
+    term1 = Y.T @ Y
+    term2 = W.T @ X.T @ Y
+    term3 = Y.T @ X @ W
+    term4 = W.T @ (X.T @ X) @ W
+
+    maximized_cov_matrix = (1 / n) * (term1 - term2 - term3 + term4)
+    return W, maximized_cov_matrix
 
 def layer_3_latent_state_severity_mapping(maximized_mean):
     mapping = 0
@@ -266,7 +291,7 @@ def process_dataframes_for_model(dataframes, K_d_insulin = 4.0, K_d_IGF1 = 1.0, 
 
     return severities_av_matrix, final_raw_design_matrix, imputeds_biomarkers_matrix
 def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biomarkers_matrix,
-                  prior_mean_matrix, prior_precision_matrix, prior_scale_matrix, initial_2nd_layer_cov_mat, dof = 0, max_iterations = 20):
+                  prior_mean_matrix, prior_precision_matrix, prior_scale_matrix, initial_2nd_layer_cov_mat, initial_2nd_layer_mean_mat, initial_2nd_layer_coeff_mat, last_OU_matrices, dof = 0, max_iterations = 20):
 
     #Initialization of all model constants already completed in model config
 
@@ -274,13 +299,19 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
     last_design_matrix = initial_design_matrix
     last_biomarkers_matrix = initial_biomarkers_matrix
     last_severities_matrix = initial_severities_matrix
+
     last_2nd_layer_covariance_matrix = initial_2nd_layer_cov_mat
+    last_2nd_layer_mean_matrix = initial_2nd_layer_mean_mat
+    last_2nd_layer_coeff_matrix = initial_2nd_layer_coeff_mat
+    processed_last_OU_matrices = {"State_Matrix_OU": last_OU_matrices["State_Matrix_OU"] * np.identity(last_biomarkers_matrix.shape[1]),
+                                  "Wiener_Matrix_OU": last_OU_matrices["Wiener_Matrix_OU"] * np.identity(last_biomarkers_matrix.shape[1])}
 
     for em_iteration in range(max_iterations):
         one_iter_layer1_params = layer_1_bml_observable_biomarkers(design_matrix=last_design_matrix, imputed_biomarkers_matrix=last_biomarkers_matrix,
                                                                  prior_mean_matrix=prior_mean_matrix, prior_precision_matrix=prior_precision_matrix, prior_scale_matrix=prior_scale_matrix, dof = dof)
-        one_iter_layer2_params = layer_2_imputed_biomarkers_multivar_model(first_layer_params=one_iter_layer1_params, last_2nd_layer_covariance_matrix=last_2nd_layer_covariance_matrix, ou_priors=None)
-
+        one_iter_layer2_params = layer_2_imputed_biomarkers_multivar_model(first_layer_params=one_iter_layer1_params, this_last_observables_cov=last_2nd_layer_covariance_matrix, ou_matrices=processed_last_OU_matrices,
+                                                                           this_last_mean=last_2nd_layer_mean_matrix, this_last_coeff_matrix=last_2nd_layer_coeff_matrix)
+        print(one_iter_layer2_params)
 def process_data_and_build_HBM(these_dataframes, model_priors_and_config_handle):
     this_ism, this_ids, this_ibm = process_dataframes_for_model(these_dataframes)
 
@@ -293,10 +324,16 @@ def process_data_and_build_HBM(these_dataframes, model_priors_and_config_handle)
     this_pmm = model_priors_and_config["Prior_Mean"] * np.ones((this_ids.shape[1], this_ibm.shape[1])) #should be shape 5,3
     this_ppm = model_priors_and_config["Prior_Precision"] * np.identity(this_ids.shape[1])
     this_pcm = model_priors_and_config["Prior_Scale"] * np.identity(this_ibm.shape[1])
+
     prior_dof = model_priors_and_config["DOF"] + 1
+    this_2nd_cov = this_pcm / (prior_dof - this_ibm.shape[0] - 1)
+    this_2nd_mean = model_priors_and_config["Prior_2nd_Mean"] * np.ones((this_ibm.shape[1], 1)) * model_priors_and_config["Prior_2nd_Mean"]
+    this_2nd_coeff_matrix = model_priors_and_config["Prior_2nd_Coeff_Matrix"] * np.identity(this_ibm.shape[1])
+
+    last_OU_matrices = {"State_Matrix_OU": model_priors_and_config["State_Matrix_OU"], "Wiener_Matrix_OU": model_priors_and_config["Wiener_Matrix_OU"]}  # placeholder
 
     this_fit_model = fit_HBM_model(initial_severities_matrix = this_ism, initial_design_matrix=this_ids, initial_biomarkers_matrix=this_ibm,
-                                   prior_mean_matrix=this_pmm, prior_precision_matrix=this_ppm, prior_scale_matrix=this_pcm, dof = prior_dof)
+                                   prior_mean_matrix=this_pmm, prior_precision_matrix=this_ppm, prior_scale_matrix=this_pcm, dof = prior_dof, initial_2nd_layer_cov_mat=this_2nd_cov, initial_2nd_layer_mean_mat= this_2nd_mean, initial_2nd_layer_coeff_mat=this_2nd_coeff_matrix, last_OU_matrices=last_OU_matrices)
 
 
 
