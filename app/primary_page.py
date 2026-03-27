@@ -29,8 +29,8 @@ def fetch_default_datasets(this_url = "https://raw.githubusercontent.com/Nathani
     try:
         response = requests.get(this_url)
         response.raise_for_status() #for bad requests
-
-        if "text/csv" in response.headers.get("content-type", ""):
+        content_type = response.headers.get("content-type", "")
+        if "text/csv" in content_type or "text/plain" in content_type:
             return StringIO(response.text)
         else:
             st.error("The content from the URL is not a CSV file. Please try again.")
