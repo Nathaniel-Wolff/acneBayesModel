@@ -451,7 +451,7 @@ def main():
 
 
 
-    this_called_model, these_deltas, observed_dirichlets, ob_empirical_matrices, ob_raw_counts = calling_model(input_file, json_url)
+    this_called_model, these_deltas, observed_dirichlets, ob_empirical_matrices, ob_raw_counts = calling_model()
     st.session_state.these_deltas = these_deltas
     st.session_state.empirical_matrices = ob_empirical_matrices
     st.session_state.raw_counts = ob_raw_counts
