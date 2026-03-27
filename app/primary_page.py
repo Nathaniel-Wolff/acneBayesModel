@@ -31,9 +31,7 @@ def fetch_default_datasets(this_url = "https://raw.githubusercontent.com/Nathani
         response.raise_for_status() #for bad requests
 
         if "text/csv" in response.headers.get("content-type", ""):
-            data = StringIO(response.text)
-            #df = pd.read_csv(data)
-            return data
+            return StringIO(response.text)
         else:
             st.error("The content from the URL is not a CSV file. Please try again.")
             return None
@@ -44,15 +42,17 @@ def fetch_default_json(this_url = "https://raw.githubusercontent.com/Nathaniel-W
     try:
         response = requests.get(this_url)
         response.raise_for_status() #for bad requests
-
-        if 'application/json' in response.headers.get("content-type", ""):
-            json_data = json.load(response.text)
-            return json_data
+        content_type = response.headers.get("content-type", "")
+        if "application/json" in content_type or "text/plain" in content_type:
+            # Use .json() helper or json.loads(response.text)
+            return response.json()
         else:
-            st.error("The content from the URL is not a JSON file. Please try again.")
+            st.error(f"Unexpected content type: {content_type}")
             return None
     except requests.exceptions.RequestException as e:
-        st.error("Data not fetched. Requested url: {}".format(e))
+        st.error(f"JSON not fetched: {e}")
+
+
 
 
 def calling_model():
