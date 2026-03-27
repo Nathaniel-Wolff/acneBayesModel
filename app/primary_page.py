@@ -25,21 +25,38 @@ st.set_page_config(layout = "wide")
 
 #calling the model with test dataset
 
-def fetch_default_datasets(this_url, constants_pointer):
+def fetch_default_datasets(this_url = "https://github.com/Nathaniel-Wolff/acneBayesModel/blob/main/app/sim_acne.csv"):
     try:
         response = requests.get(this_url)
         response.raise_for_status() #for bad requests
 
         if "text/csv" in response.headers.get("content-type", ""):
             data = StringIO(response.text)
-            df = pd.read_csv(data)
-            return df
+            #df = pd.read_csv(data)
+            return data
         else:
             st.error("The content from the URL is not a CSV file. Please try again.")
             return None
     except requests.exceptions.RequestException as e:
         st.error("Data not fetched. Requested url: {}".format(e))
-def calling_model(this_raw_data_name, json_name):
+
+def fetch_default_json(this_url = "https://github.com/Nathaniel-Wolff/acneBayesModel/blob/main/app/initial_constants.json"):
+    try:
+        response = requests.get(this_url)
+        response.raise_for_status() #for bad requests
+
+        if 'application/json' in response.headers.get("content-type", ""):
+            json_data = json.load(response.text)
+            return json_data
+        else:
+            st.error("The content from the URL is not a JSON file. Please try again.")
+            return None
+    except requests.exceptions.RequestException as e:
+        st.error("Data not fetched. Requested url: {}".format(e))
+
+
+def calling_model(url, json_data):
+    this_raw_data_name = fetch_default_datasets(url)
     data_returns = data_parsing(this_raw_data_name)
     these_averages = data_returns[5]
     these_dirichlets = data_returns[6]
@@ -47,10 +64,10 @@ def calling_model(this_raw_data_name, json_name):
     transition_counts = data_returns[8]
 
 
-    with open(json_name, "r") as icgs:
-        initial_constant_guesses = json.load(icgs)
-        #change config later
-        this_model_config = {"scoring": np.random.randn(3, 3) * 0.02,
+
+    initial_constant_guesses = json_data
+    #change config later
+    this_model_config = {"scoring": np.random.randn(3, 3) * 0.02,
                              # column order: low severity change, medium, high. row order: #bacteria, inflammation, sebum.
                              "biases": [0, 0, 0],
                              "scoring_trans_row 0": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
@@ -429,9 +446,12 @@ def main():
     build_trajectory()
 
     input_file = st.text_input("Type the url where you are trying to get your data from.")
+    json_url = st.text_input("Type the url where the initial constants are.")
 
 
-    this_called_model, these_deltas, observed_dirichlets, ob_empirical_matrices, ob_raw_counts = calling_model("sim_acne.csv", "initial_constants.json")
+
+
+    this_called_model, these_deltas, observed_dirichlets, ob_empirical_matrices, ob_raw_counts = calling_model(input_file, "initial_constants.json")
     st.session_state.these_deltas = these_deltas
     st.session_state.empirical_matrices = ob_empirical_matrices
     st.session_state.raw_counts = ob_raw_counts
