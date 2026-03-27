@@ -363,4 +363,4 @@ def data_parsing(data_filename):
 
     these_Dirichlets, these_categories = build_Dirichlet(uninformative_prior, built_histograms)
     
-    return this_treatment_history, these_assigned_md_DFs, these_states, these_ranges, this_md_DFs, these_state_averages, these_Dirichlets, built_transition_dict, transition_counts
+    return this_treatment_history, these_assigned_md_DFs, these_states, these_ranges, this_md_DFs, these_state_averages, these_Dirichlets, built_transition_dict, transition_counts, this_seperate_DFs
