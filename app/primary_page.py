@@ -25,7 +25,7 @@ st.set_page_config(layout = "wide")
 
 #calling the model with test dataset
 
-def fetch_default_datasets(this_url = "https://github.com/Nathaniel-Wolff/acneBayesModel/blob/main/app/sim_acne.csv"):
+def fetch_default_datasets(this_url = "https://raw.githubusercontent.com/Nathaniel-Wolff/acneBayesModel/main/app/sim_acne.csv"):
     try:
         response = requests.get(this_url)
         response.raise_for_status() #for bad requests
@@ -40,7 +40,7 @@ def fetch_default_datasets(this_url = "https://github.com/Nathaniel-Wolff/acneBa
     except requests.exceptions.RequestException as e:
         st.error("Data not fetched. Requested url: {}".format(e))
 
-def fetch_default_json(this_url = "https://github.com/Nathaniel-Wolff/acneBayesModel/blob/main/app/initial_constants.json"):
+def fetch_default_json(this_url = "https://raw.githubusercontent.com/Nathaniel-Wolff/acneBayesModel/main/app/initial_constants.json"):
     try:
         response = requests.get(this_url)
         response.raise_for_status() #for bad requests
