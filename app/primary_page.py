@@ -55,8 +55,9 @@ def fetch_default_json(this_url = "https://github.com/Nathaniel-Wolff/acneBayesM
         st.error("Data not fetched. Requested url: {}".format(e))
 
 
-def calling_model(url, json_data):
-    this_raw_data_name = fetch_default_datasets(url)
+def calling_model():
+    this_json = fetch_default_json()
+    this_raw_data_name = fetch_default_datasets()
     data_returns = data_parsing(this_raw_data_name)
     these_averages = data_returns[5]
     these_dirichlets = data_returns[6]
@@ -65,7 +66,7 @@ def calling_model(url, json_data):
 
 
 
-    initial_constant_guesses = json_data
+    initial_constant_guesses = this_json
     #change config later
     this_model_config = {"scoring": np.random.randn(3, 3) * 0.02,
                              # column order: low severity change, medium, high. row order: #bacteria, inflammation, sebum.
