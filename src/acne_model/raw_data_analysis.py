@@ -56,7 +56,7 @@ def normalize_dataframe_w_baseline(dataframe, start_column_index, end_column_ind
     last_part = the_dataframe.iloc[:, end_column_index+1:].copy()
 
     baseline_means = normalized_part.iloc[:end_index, :].mean()
-    normalized_part = abs(((baseline_means - normalized_part) / baseline_means) * 100) #changed, check this later
+    normalized_part = ((normalized_part - baseline_means) / baseline_means) * 100 #changed, check this later
     remerged = pd.concat([beginning, normalized_part], axis=1)
     last_remerged = pd.concat([remerged, last_part], axis=1)
 
@@ -85,7 +85,7 @@ def add_history_metadata(seperatePatientsDFs, allPatientsIntroDays):
         modified_DF = patient_DF.copy()
         new_one = normalize_dataframe_w_baseline(dataframe = modified_DF, start_column_index= 7, end_column_index = 12, end_index = days_of_intro[0][2])
 
-        
+
         modifiedDFs.append(new_one)
         counter += 1
     

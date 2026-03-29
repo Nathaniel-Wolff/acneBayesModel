@@ -119,34 +119,26 @@ def layer_1_bml_observable_biomarkers(design_matrix, imputed_biomarkers_matrix, 
 
     return first_layer_params
 
-def compute_ll_moments_within_layers(last_observables_cov, last_imputed_mean, last_coeff_matrix, imputed_biomarkers_matrix, first_layer_params, third_layer_mapping):
-    here_scale_matrix = first_layer_params["post_scale_matrix"]
-    inv_prior_cov = np.linalg.inv(last_observables_cov)
-    precision_from_obs = last_imputed_mean.T @ np.linalg.inv(here_scale_matrix) @ last_imputed_mean
+def maximization_compute_cross_covs(latent_states, latent_state_covs, latent_states_lagged_covs):
+    #computing state correlations and serial lag correlations at the same time
+    state_correlations = np.zeros((latent_states[0].shape[0], latent_states[0].shape[0]))
+    one_lag_correlations = np.zeros((latent_states[0].shape[0], latent_states[0].shape[0]))
+    prev_state_correlations = np.zeros((latent_states[0].shape[0], latent_states[0].shape[0]))
 
-    posterior_cov_matrix = np.linalg.inv(inv_prior_cov + precision_from_obs)
-    posterior_cov_matrix = (posterior_cov_matrix @ posterior_cov_matrix.T)/2 #forcing symmetry to avoid singularity
+    last_latent_state = latent_states[0]
+    for i, (latent_state, smoothed_cov, latent_state_lagged_cov) in enumerate(zip(latent_states, latent_state_covs, latent_states_lagged_covs)):
+        one_state_correlation_mean = latent_state @ latent_state.T + smoothed_cov
+        one_serial_lag_correlation_mean = latent_state @ last_latent_state.T + latent_state_lagged_cov
 
-    #avoiding batched update in favor of a unique latent state for each observation, as with data driven version
-    #Updating 2nd Moment Matrix accordingly, forcing symmetry to avoid singularity
-    transposed_imputeds = imputed_biomarkers_matrix.T
-    data_contribution = last_coeff_matrix.T @ np.linalg.inv(here_scale_matrix) @ transposed_imputeds
+        state_correlations += one_state_correlation_mean
+        one_lag_correlations += one_serial_lag_correlation_mean
 
-    posterior_imputed_mean = posterior_cov_matrix @ ((np.linalg.inv(last_observables_cov) @ last_imputed_mean) + data_contribution)
+        if i > 1:
+            prev_state_correlations += one_state_correlation_mean
 
-    mu = np.asarray(posterior_imputed_mean)
-    N = mu.shape[1]
-    sum_outer_products = mu @ mu.T
-    total_imputed_second_moment = posterior_cov_matrix + (sum_outer_products / N)
-    total_imputed_second_moment = (total_imputed_second_moment + total_imputed_second_moment.T) / 2
+    cross_covs = {"state_correlations": state_correlations, "one_lag_correlations": one_lag_correlations, "prev_state_correlations": prev_state_correlations}
 
-    #calculating the best estimate of latent state on forward pass with third layer mapping (A)
-    latent_state_forward_estimate = third_layer_mapping * imputed_biomarkers_matrix
-
-    all_within_layers_moments = {"posterior_imputed_mean": posterior_imputed_mean, "total_imputed_2nd_moment": total_imputed_second_moment, "2nd_layer_posterior_covariance": posterior_cov_matrix,
-                                 "latent_state_forward_estimate": latent_state_forward_estimate}
-
-    return all_within_layers_moments
+    return cross_covs
 
 def compute_cross_layer_moments(layer_2_mapping, all_within_layers_moments, first_layer_params):
     """Also solves for the latent state serial covariance, Cov(v_t, v_t-1), using OU process params."""
@@ -161,24 +153,26 @@ def compute_cross_layer_moments(layer_2_mapping, all_within_layers_moments, firs
 
     return cross_layer_lagged_moments
 
-def layer_2_imputed_biomarkers_multivar_model(first_layer_params, this_last_observables_cov, this_last_mean, this_last_coeff_matrix, ou_matrices, current_ls_ev_F, current_imp_map_H, current_proceess_noise_cov, current_measurement_noise_cov):
+def layer_2_imputed_biomarkers_multivar_model(first_layer_params, this_last_observables_cov, this_last_mean, this_last_coeff_matrix, ou_matrices, current_ls_ev_F, current_imp_map_H, last_initial_state, current_process_noise_cov, current_measurement_noise_cov):
     """Fits layer 2 of the imputed biomarker multivariate model. Implements one iteration of EM."""
     # ends with learning the relative contributions of the imputed biomarkers to total bacterial dysbiosis, total sebum production, total inflammation
 
-    usable_design_matrix = first_layer_params["design_matrix"]
-    usable_imputeds_matrix = first_layer_params["imputed_biomarkers_matrix"]
-
-
+    usable_imputeds_matrix = first_layer_params["imputed_biomarkers_matrix"].to_numpy()
     #---Expectation Step
-    expectation_result = all_layers_expectation_step(last_observables_cov=this_last_observables_cov, last_mean=this_last_mean, last_coeff_matrix=this_last_coeff_matrix, first_layer_params=first_layer_params,
-                                                     last_ls_ev_F=current_ls_ev_F, last_imp_map_H=current_imp_map_H, last_process_noise_cov=current_proceess_noise_cov, last_measurement_noise_cov=current_measurement_noise_cov,
-                                                     imputed_biomarkers_matrix=usable_imputeds_matrix, )
+    expectation_results = all_layers_expectation_step(last_observables_cov=this_last_observables_cov, last_mean=this_last_mean, last_coeff_matrix=this_last_coeff_matrix, first_layer_params=first_layer_params,
+                                                     last_ls_ev_F=current_ls_ev_F, last_imp_map_H=current_imp_map_H, last_process_noise_cov=current_process_noise_cov, last_measurement_noise_cov=current_measurement_noise_cov,
+                                                     imputed_biomarkers_matrix=usable_imputeds_matrix, last_initial_latent_state=last_initial_state, last_process_cov= this_last_observables_cov)
 
-    print(expectation_result)
+    unpacked_latent_states  = expectation_results["latent_states"]
+    latent_state_covs = expectation_results["latent_state_covs"]
+    latent_state_lagged_covs = expectation_results["lagged_latent_state_covs"]
+    latent_state_resids = expectation_results["latent_state_resids"]
+
 
     #---Maximization Step
-    #mean_maximized, cov_matrix_maximized = full_maximization_step_HBM(usable_posterior_mean = posterior_mean_imputed, usable_posterior_second_moment_matrix = posterior_second_moment_imputed,
-                                                                      #design_matrix=usable_design_matrix, n = usable_design_matrix.shape[1], imputed_biomarkers_matrix=usable_imputeds_matrix)
+    this_maximization = full_maximization_step_HBM(latent_states = unpacked_latent_states,
+                                                   smoothed_covariances = latent_state_covs, lagged_covariances = latent_state_lagged_covs, imputed_biomarkers=usable_imputeds_matrix)
+
 
     #---Computation of Ornstein Uhlenbeck RV, indexed by its continous Lyanpunov equation solution matrix
     #this_OU_State_Matrix_const = ou_matrices["State_Matrix_OU"]
@@ -205,73 +199,90 @@ def all_layers_expectation_step(last_observables_cov, last_mean, last_coeff_matr
     """
     rng = np.random.default_rng()
     latent_states = [last_initial_latent_state]
+
     latent_state_covs = [last_process_cov]
+    lagged_latent_state_covs = []
     latent_state_resids = []
     last_a_post_estimate = last_initial_latent_state
     last_a_post_cov_est = last_process_cov
+
+
+    kalman_gains = []
+    smoothing_gains = []
+
+
     for iteration in range(0, len(imputed_biomarkers_matrix)):
         #---Prediction Step
         a_priori_state = last_ls_ev_F @ last_a_post_estimate #+B_k @ U_k
-        random_noise_realization_process = rng.normal(loc=np.zeroes((last_ls_ev_F @ last_a_post_estimate).shape), scale=last_process_noise_cov, size=(last_ls_ev_F @ last_a_post_estimate).shape)
-        a_priori_cov = last_ls_ev_F @ last_a_post_cov_est @ last_ls_ev_F.T + random_noise_realization_process
+        #random_noise_realization_process = rng.normal(loc=np.zeros((last_ls_ev_F @ last_a_post_estimate).shape), scale=last_process_noise_cov, size=(last_ls_ev_F @ last_a_post_estimate).shape)
+        a_priori_cov = last_ls_ev_F @ last_a_post_cov_est @ last_ls_ev_F.T + last_process_noise_cov
 
         #---Update Step
-        random_noise_realization = rng.normal(loc=np.zeroes( (last_imp_map_H @ a_priori_state).shape), scale=last_measurement_noise_cov, size=(last_imp_map_H @ a_priori_state).shape)
+        random_noise_realization = rng.normal(loc=np.zeros( (last_imp_map_H @ a_priori_state).shape), scale=last_measurement_noise_cov, size=(last_imp_map_H @ a_priori_state).shape)
         pred_imputed = last_imp_map_H @ a_priori_state + random_noise_realization
+
         innovation = imputed_biomarkers_matrix[iteration] - pred_imputed
         innovation_cov = last_imp_map_H @ a_priori_cov @ last_imp_map_H.T + last_measurement_noise_cov
 
         opt_Kal_gain = a_priori_cov @ last_imp_map_H.T @ innovation_cov
         kg_size = opt_Kal_gain.shape
+
         a_post_state  = a_priori_state + opt_Kal_gain @ innovation
-        a_post_cov = (np.identity(kg_size) - opt_Kal_gain @ last_imp_map_H) @ a_priori_cov
+        a_post_cov = (np.identity(kg_size[0]) - opt_Kal_gain @ last_imp_map_H) @ a_priori_cov
         a_post_residual = pred_imputed - last_imp_map_H @ a_post_state
+
+        #computing smoothing gain explicitly
+        if iteration > 0:
+            smoothing_gain =  last_a_post_cov_est @ last_ls_ev_F.T @ np.linalg.pinv(a_priori_cov) #pinverse for now, need to fix singularity
+            smoothing_gains.append(smoothing_gain)
+
+
 
         latent_states.append(a_post_state)
         latent_state_covs.append(a_post_cov)
         latent_state_resids.append(a_post_residual)
+        kalman_gains.append(opt_Kal_gain)
 
         #updating
         last_a_post_estimate = a_post_state
         last_a_post_cov_est = a_post_cov
 
+    #calculating the lagged-1 covariances recursively
+    current_future_smoothing = list(reversed(smoothing_gains))[0] #future one is seen as the last one, past one is seen as the future one
+    #current_future_lag_cov = list(reversed(latent_state_covs))[0]
+    for i, (smoothing_gain, a_post_cov) in enumerate(zip(reversed(smoothing_gains), reversed(latent_state_covs))):
+        if  1 < i < len(smoothing_gains) - 1:
+            current_past_lag_cov = latent_state_covs[i-1]
+            lag_1_cov = a_post_cov @ current_future_smoothing.T + smoothing_gain @ (current_past_lag_cov - last_ls_ev_F @ a_post_cov) @ current_future_smoothing.T
+            lagged_latent_state_covs.append(lag_1_cov)
 
-    results = {"latent_states": latent_states, "latent_state_covs": latent_state_covs, "latent_state_resids": latent_state_resids}
+    lagged_latent_state_covs.reverse()
+
+
+    results = {"latent_states": latent_states, "latent_state_covs": latent_state_covs, "latent_state_resids": latent_state_resids, "kalman_gains": kalman_gains, "smoothing_gains": smoothing_gains,
+               "lagged_latent_state_covs": lagged_latent_state_covs}
 
     return results
+def full_maximization_step_HBM(latent_states, smoothed_covariances, lagged_covariances, imputed_biomarkers):
+    """Maximizes in closed form."""
+    sufficient_stats = maximization_compute_cross_covs(latent_states = latent_states,
+                                                       latent_state_covs = smoothed_covariances, latent_states_lagged_covs = lagged_covariances)
+    new_ls_ev_F = sufficient_stats["one_lag_correlations"] @ np.linalg.pinv(sufficient_stats["prev_state_correlations"])
+    outer_products = [np.outer(imp, lat) for lat, imp in zip(latent_states, imputed_biomarkers)]
+    sum_outer = np.sum(outer_products, axis=0)
+    new_imp_map_H = sum_outer @ np.linalg.pinv(sufficient_stats["state_correlations"])
 
+    new_process_cov_Q = 1/len(latent_states) * (sufficient_stats["state_correlations"] - new_ls_ev_F @ sufficient_stats["one_lag_correlations"].T)
 
+    new_measurement_cov_R = np.zeros(new_imp_map_H.shape)
 
-    # all_within_layers_moments = compute_ll_moments_within_layers(
-    #     last_observables_cov=last_observables_cov,
-    #     last_imputed_mean=last_mean, last_coeff_matrix=last_coeff_matrix,
-    #     imputed_biomarkers_matrix=imputed_biomarkers_matrix, first_layer_params=first_layer_params)
-    # here_2nd_layer_covariance = all_within_layers_moments["2nd_layer_posterior_covariance"]
-    # cross_multilayer_cov_terms = compute_cross_layer_moments(layer_2_mapping = last_ls_ev_F, second_layer_params=all_within_layers_moments,
-    #                                                          first_layer_params=first_layer_params)
-    # here_cross_covariance = cross_multilayer_cov_terms["joint_covariance_O_L"]
+    for latent_state, imp_vector, smoothed_covariance in zip(latent_states, imputed_biomarkers, smoothed_covariances):
+        one_term = (imp_vector - new_imp_map_H @ latent_state) @ (imp_vector - new_imp_map_H @ latent_state).T + new_imp_map_H @ smoothed_covariance @ new_imp_map_H.T
+        new_measurement_cov_R += one_term
 
-
-def full_maximization_step_HBM(usable_posterior_mean, usable_posterior_second_moment_matrix, design_matrix, imputed_biomarkers_matrix, n):
-    """Function that optimizes Gaussian complete-data likelihood (posterior) in closed form with the first two moments
-    of the posterior. Used in layer 2 of the full HBM."""
-    #stripping any Pandas column names in case of issues
-    X = design_matrix.values if hasattr(design_matrix, 'values') else design_matrix
-    mu = usable_posterior_mean.values if hasattr(usable_posterior_mean, 'values') else usable_posterior_mean
-    S = usable_posterior_second_moment_matrix.values if hasattr(usable_posterior_second_moment_matrix,
-                                                                'values') else usable_posterior_second_moment_matrix
-
-    W = (X.T @ mu.T) @ np.linalg.inv(S) #maximized weights
-    n = X.shape[0]
-
-    Y = imputed_biomarkers_matrix.values
-    term1 = Y.T @ Y
-    term2 = W.T @ X.T @ Y
-    term3 = Y.T @ X @ W
-    term4 = W.T @ (X.T @ X) @ W
-
-    maximized_cov_matrix = (1 / n) * (term1 - term2 - term3 + term4)
-    return W, maximized_cov_matrix
+    #mental note: just need to close the loop of these new mappings and add backprogagation of Kalman gain into the layer 1 mapping
+    #introduce NN to replace linearization next?
+    return sufficient_stats
 
 def layer_3_latent_state_severity_mapping(maximized_mean):
     mapping = 0
@@ -417,19 +428,21 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
                      control_matrices['Dysbiosis']["Means"].to_numpy(),
                      control_matrices["LKB4 Conc."]["Means"].to_numpy()]
 
-    imputeds_mean = [np.mean(control_matrices['mTORC1 Conc.']["Means"].to_numpy()), np.mean(control_matrices['Dysbiosis']["Means"].to_numpy()), np.mean(control_matrices["LKB4 Conc."]["Means"].to_numpy())]
+    imputeds_mean = np.array([np.mean(control_matrices['mTORC1 Conc.']["Means"].to_numpy()), np.mean(control_matrices['Dysbiosis']["Means"].to_numpy()), np.mean(control_matrices["LKB4 Conc."]["Means"].to_numpy())])
+
 
 
     this_initial_latent_state = np.linalg.inv(initial_H @ initial_H.T) @ initial_H @ imputeds_mean
     this_initial_covariance = np.cov(m = imputeds_list, rowvar=True)
-    print(this_initial_latent_state, this_initial_covariance)
+    #print(this_initial_latent_state, this_initial_covariance)
 
     for em_iteration in range(max_iterations):
         one_iter_layer1_params = layer_1_bml_observable_biomarkers(design_matrix=last_design_matrix, imputed_biomarkers_matrix=last_biomarkers_matrix,
                                                                  prior_mean_matrix=prior_mean_matrix, prior_precision_matrix=prior_precision_matrix, prior_scale_matrix=prior_scale_matrix, dof = dof)
         one_iter_layer2_params = layer_2_imputed_biomarkers_multivar_model(first_layer_params=one_iter_layer1_params, this_last_observables_cov=last_2nd_layer_covariance_matrix, ou_matrices=processed_last_OU_matrices,
                                                                            this_last_mean=last_2nd_layer_mean_matrix, this_last_coeff_matrix=last_2nd_layer_coeff_matrix, current_ls_ev_F=initial_F, current_imp_map_H=initial_H,
-                                                                           current_measurement_noise_cov=initial_Q, current_proceess_noise_cov=initial_R, initial_latent_state = this_initial_latent_state, this_initial_covariance = this_initial_covariance)
+                                                                           current_measurement_noise_cov=initial_Q, current_process_noise_cov=initial_R, last_initial_state=this_initial_latent_state)
+
 
 def process_data_and_build_HBM(these_dataframes, model_priors_and_config_handle, these_raw_frames):
     this_ism, this_ids, this_ibm, this_control_tensor, dataframe_column_names_ordered = process_dataframes_for_model(these_dataframes, these_raw_frames)
@@ -449,8 +462,8 @@ def process_data_and_build_HBM(these_dataframes, model_priors_and_config_handle,
     this_2nd_coeff_matrix = model_priors_and_config["Prior_2nd_Coeff_Matrix"] * np.identity(this_ibm.shape[1])
 
     initial_ls_ev_f = model_priors_and_config["Initial_LS_EV_F"] * np.identity(this_pmm.shape[1])
-    initial_imp_map_H = np.diag(model_priors_and_config["Initial_IMP_Map_H"] * np.ones(this_pmm.shape[0]))
-    initial_q_process_noise = model_priors_and_config["Initial_Q_Process_Noise"] * np.ones(this_pmm.shape[0])
+    initial_imp_map_H = np.diag(model_priors_and_config["Initial_IMP_Map_H"] * np.ones(this_pmm.shape[1]))
+    initial_q_process_noise = model_priors_and_config["Initial_Q_Process_Noise"] * np.ones(this_pmm.shape[1]) #changed
     initial_r_measurement_noise = model_priors_and_config["Initial_R_Measurement Noise"] * np.ones(this_2nd_mean.shape[0])
 
     last_OU_matrices = {"State_Matrix_OU": model_priors_and_config["State_Matrix_OU"], "Wiener_Matrix_OU": model_priors_and_config["Wiener_Matrix_OU"]}  # placeholder
@@ -1117,7 +1130,6 @@ def model_building(these_empirical_counts, these_empirical_kernels, these_initia
     this_fit_SSM = fit_latent_state_space_model(these_empirical_counts, these_empirical_kernels, reparameterized, raw_distributions,
                                                 severity_deltas, model_config)
     return this_fit_SSM
-
 
 def latent_state_clustering(predicted_latent_trajectory):
     """Function that applies clustering methods to the predicted latent state trajectory for
