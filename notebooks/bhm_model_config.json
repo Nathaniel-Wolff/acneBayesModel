@@ -8,7 +8,7 @@
   "State_Matrix_OU": 1e-1,
   "Wiener_Matrix_OU": 1e-1,
   "Initial_LS_EV_F": 0.98,
-  "Initial_IMP_Map_H": 0.50,
+  "Initial_IMP_Map_A": 0.50,
   "Initial_Q_Process_Noise": 1e-2,
   "Initial_R_Measurement Noise": 1e-2
 }
