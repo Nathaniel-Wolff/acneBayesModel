@@ -14,10 +14,10 @@ import numpy as np
 import pandas as pd
 from acne_model import data_parsing, model_building
 from scipy.stats import beta
-from acne_model.model import state_evolution_vv as evolution_function
-from acne_model.model import reparameterize
-from acne_model.model import map_latent_states_to_probs as severity_distribution_function
-from acne_model.model import compute_cluster_dirichlets, assign_label, adjust_empirical_kernel
+from acne_model.model_data_driven import state_evolution_vv as evolution_function
+from acne_model.model_data_driven import reparameterize
+from acne_model.model_data_driven import map_latent_states_to_probs as severity_distribution_function
+from acne_model.model_data_driven import compute_cluster_dirichlets, assign_label, adjust_empirical_kernel
 from collections import defaultdict
 
 st.title("Acne Severity Analysis")
@@ -51,9 +51,6 @@ def fetch_default_json(this_url = "https://raw.githubusercontent.com/Nathaniel-W
             return None
     except requests.exceptions.RequestException as e:
         st.error(f"JSON not fetched: {e}")
-
-
-
 
 def calling_model():
     this_json = fetch_default_json()
