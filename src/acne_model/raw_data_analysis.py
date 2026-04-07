@@ -48,20 +48,22 @@ def seperate_patients(raw_data):
     return seperatePatientsDFs, allPatientsIntroDays
 
 
-def normalize_dataframe_w_baseline(dataframe, start_column_index, end_column_index, end_index):
+def normalize_dataframe_w_baseline(dataframe, start_column_index, end_column_index, end_row_bl):
     """Function for quick normalization of multiple dataframe columns relative to baseline, as used below."""
     the_dataframe = dataframe.copy()
+
     beginning = the_dataframe.iloc[:, 0:start_column_index]
-    normalized_part = the_dataframe.iloc[:, start_column_index:end_column_index + 1]
-    last_part = the_dataframe.iloc[:, end_column_index+1:].copy()
+    to_normalize = the_dataframe.iloc[:, start_column_index: end_column_index + 1]
+    last_part = the_dataframe.iloc[:, end_column_index + 1:]
 
-    baseline_means = normalized_part.iloc[:end_index, :].mean()
-    normalized_part = ((normalized_part - baseline_means) / baseline_means) * 100 #changed, check this later
-    remerged = pd.concat([beginning, normalized_part], axis=1)
-    last_remerged = pd.concat([remerged, last_part], axis=1)
+    baseline_means = to_normalize.iloc[:end_row_bl].mean()
+    new_normalized_part = ((to_normalize - baseline_means) / baseline_means) * 100 #changed, check this later
 
-    #print("normalized_parts", last_remerged)
-    return last_remerged
+    remerged = pd.concat([beginning, new_normalized_part, last_part], axis=1)
+
+    print(remerged)
+
+    return remerged
 def add_history_metadata(seperatePatientsDFs, allPatientsIntroDays, start_column_index = 7, end_column_index = 12):
     """Function that adds a treatment history metadata column to each patient's dataframe by...
     1) Loading each seperate patient's dataframe and compute the average baseline severity, normalizing acne severity scores. Then modifies the dataframe, called a severities dataframe.
@@ -83,7 +85,7 @@ def add_history_metadata(seperatePatientsDFs, allPatientsIntroDays, start_column
         #forming new dataframe from old one containing percent severity over baseline
         #now modified to do the same for all observables and imputed biomarkers
         modified_DF = patient_DF.copy()
-        new_one = normalize_dataframe_w_baseline(dataframe = modified_DF, start_column_index= start_column_index, end_column_index = end_column_index, end_index = days_of_intro[0][2])
+        new_one = normalize_dataframe_w_baseline(dataframe = modified_DF, start_column_index= start_column_index, end_column_index = end_column_index, end_row_bl= days_of_intro[0][2])
 
 
         modifiedDFs.append(new_one)
@@ -141,14 +143,14 @@ def find_and_plot_severity_states(metadata_DFs):
     all_severities = []
 
     for df in metadata_DFs:
-        all_severities.extend(df["AcneSeverity"]) #changed to remove positive conversion because of changes upstream
+        all_severities.extend(df["AcneSeverity"] * -1) #changed to remove positive conversion because of changes upstream
 
     #print("these alls", all_severities)
     # extracting the equation of the pdf and finding the local minimum in between the two modes
     kde_pdf = sp.stats.gaussian_kde(all_severities)
 
     # using max and min of pdf to find saddle point in between 2 modes, sampling 1000 points
-    neg_kde = lambda x: kde_pdf(x.reshape(1, -1)) #removing negative because of earlier reason
+    neg_kde = lambda x: -kde_pdf(x.reshape(1, -1)) #removing negative because of earlier reason
     # finding the two main modes using optimization, with first 2 mode guesses at the .2 and .8 quantiles
     guesses = np.percentile(all_severities, [20, 80])
 
@@ -159,10 +161,12 @@ def find_and_plot_severity_states(metadata_DFs):
     modes = np.array(modes)
 
 
+
     # finding the saddle point in between the two modes, using that as cutoff for the two patient states
     initial_guess = np.mean(modes)  # average of the modes
 
-    bds = [(min(modes) + 1, min(modes) + 1)]  # Changed to account for positivity change
+    bds = [(min(modes) + 1, max(modes) - 1 )]  # Changed to account for positivity change
+    #print("bounds", bds)
 
     saddle_pt = optimize.minimize(kde_pdf, [initial_guess], bounds=bds)
     state_ranges = [modes[0], saddle_pt.x[0], modes[1]]
