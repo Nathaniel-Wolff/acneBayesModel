@@ -160,7 +160,7 @@ def find_and_plot_severity_states(metadata_DFs):
 
     # finding the saddle point in between the two modes, using that as cutoff for the two patient states
     initial_guess = np.mean(modes)  # average of the modes
-    bds = [(min(modes) + 1, max(modes) - 1)]  # This is a list of two tuples for each mode
+    bds = [(max(modes) - 1, min(modes) + 1)]  # Changed to account for positivity change
 
     saddle_pt = optimize.minimize(kde_pdf, [initial_guess], bounds=bds)
     state_ranges = [modes[0], saddle_pt.x[0], modes[1]]
