@@ -60,9 +60,9 @@ def normalize_dataframe_w_baseline(dataframe, start_column_index, end_column_ind
     remerged = pd.concat([beginning, normalized_part], axis=1)
     last_remerged = pd.concat([remerged, last_part], axis=1)
 
-
+    #print("normalized_parts", last_remerged)
     return last_remerged
-def add_history_metadata(seperatePatientsDFs, allPatientsIntroDays):
+def add_history_metadata(seperatePatientsDFs, allPatientsIntroDays, start_column_index = 7, end_column_index = 12):
     """Function that adds a treatment history metadata column to each patient's dataframe by...
     1) Loading each seperate patient's dataframe and compute the average baseline severity, normalizing acne severity scores. Then modifies the dataframe, called a severities dataframe.
     2) For each, mapping each value for treatment to a treatment history tuple. It is a tuple of the form ((days of treatment, ai), (days of treatment, ai+1),....(days of treatment, an))
@@ -83,7 +83,7 @@ def add_history_metadata(seperatePatientsDFs, allPatientsIntroDays):
         #forming new dataframe from old one containing percent severity over baseline
         #now modified to do the same for all observables and imputed biomarkers
         modified_DF = patient_DF.copy()
-        new_one = normalize_dataframe_w_baseline(dataframe = modified_DF, start_column_index= 7, end_column_index = 12, end_index = days_of_intro[0][2])
+        new_one = normalize_dataframe_w_baseline(dataframe = modified_DF, start_column_index= start_column_index, end_column_index = end_column_index, end_index = days_of_intro[0][2])
 
 
         modifiedDFs.append(new_one)
@@ -158,9 +158,11 @@ def find_and_plot_severity_states(metadata_DFs):
         modes.append(better.x[0])
     modes = np.array(modes)
 
+
     # finding the saddle point in between the two modes, using that as cutoff for the two patient states
     initial_guess = np.mean(modes)  # average of the modes
-    bds = [(max(modes) - 1, min(modes) + 1)]  # Changed to account for positivity change
+
+    bds = [(min(modes) + 1, min(modes) + 1)]  # Changed to account for positivity change
 
     saddle_pt = optimize.minimize(kde_pdf, [initial_guess], bounds=bds)
     state_ranges = [modes[0], saddle_pt.x[0], modes[1]]
@@ -349,13 +351,12 @@ def build_transition_kernels(dirichlet_prior, dirichlets):
 
     return all_matrices
 
-def data_parsing(data_filename):
+def data_parsing(data_filename, norm_column_start = 7, norm_column_end = 12):
     """Function that does the data parsing, given a csv filename in the same directory."""
     raw_data = pd.read_csv(data_filename)
     # actual implementation
     this_seperate_DFs, this_intro_days = seperate_patients(raw_data)
-    # this_inspected_data = display_plots_of_dataset(this_seperate_DFs, this_intro_days, .1) #for inspection
-    this_md_DFs, this_treatment_history, these_history_distributions, these_baselines = add_history_metadata(this_seperate_DFs, this_intro_days)
+    this_md_DFs, this_treatment_history, these_history_distributions, these_baselines = add_history_metadata(seperatePatientsDFs=this_seperate_DFs, allPatientsIntroDays=this_intro_days, start_column_index=norm_column_start, end_column_index=norm_column_end) #use correct column
     these_states, these_ranges = find_and_plot_severity_states(this_md_DFs)
     these_assigned_md_DFs, these_state_averages = assign_states_to_mdfs(this_md_DFs, these_states, these_ranges)
 
