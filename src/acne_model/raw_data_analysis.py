@@ -137,16 +137,18 @@ def find_and_plot_severity_states(metadata_DFs):
     """Determines the quantile cutoff determining the quantiles corresponding to categorical acne severity states (low, medium, and high), by
     1) Computing the KDE of the distribution of all normalized acne severity scores over all patients and treatment histories.
     2) Using optimization to find the saddle point of the distribution and consolidating with the modes."""
-    # collecting all severities, converting all to positive values, flattening as we go
+    # collecting all severities, flattening as we go
     all_severities = []
-    for df in metadata_DFs:
-        all_severities.extend(df["AcneSeverity"] * -1)
 
+    for df in metadata_DFs:
+        all_severities.extend(df["AcneSeverity"]) #changed to remove positive conversion because of changes upstream
+
+    #print("these alls", all_severities)
     # extracting the equation of the pdf and finding the local minimum in between the two modes
     kde_pdf = sp.stats.gaussian_kde(all_severities)
 
     # using max and min of pdf to find saddle point in between 2 modes, sampling 1000 points
-    neg_kde = lambda x: -kde_pdf(x.reshape(1, -1))
+    neg_kde = lambda x: kde_pdf(x.reshape(1, -1)) #removing negative because of earlier reason
     # finding the two main modes using optimization, with first 2 mode guesses at the .2 and .8 quantiles
     guesses = np.percentile(all_severities, [20, 80])
 
