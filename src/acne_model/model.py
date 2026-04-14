@@ -8,8 +8,8 @@ import json
 from scipy.stats import invwishart, multivariate_normal
 from scipy.linalg import eigvals, solve_continuous_lyapunov
 from scipy.stats import entropy
-from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import GradientBoostingRegressor
 
 def layer_1_bml_observable_biomarkers(design_matrix, imputed_biomarkers_matrix, current_mean_matrix, prior_precision_matrix, prior_scale_matrix, dof):
     """Solves for the multivariate normal distribution between imputed biomarker vectors and observed clinical biomarkers.
@@ -479,7 +479,7 @@ def normalize_matrix_columnwise(M):
     return (M - np.mean(M, axis=0)) / np.std(M, axis=0)
 def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biomarkers_matrix,
                   prior_mean_matrix, prior_precision_matrix, prior_scale_matrix, initial_2nd_layer_cov_mat, initial_2nd_layer_mean_mat,
-                  initial_2nd_layer_coeff_mat, last_OU_matrices, initial_F, initial_A, initial_Q, initial_R,
+                  initial_2nd_layer_coeff_mat, last_OU_matrices, initial_F, initial_A, initial_Q, initial_R, all_diet_data, all_treatment_data, all_iAUCs,
                   dof = 0, max_epochs = 20, tikh_reg_term = 1e-2, learning_rate = 1e-5):
 
     #Initialization of all model constants already completed in model config
@@ -522,8 +522,7 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
 
 
     for em_epoch in range(max_epochs):
-        #print(f"Epoch Number: , {em_epoch}.")
-
+        #----Kalman Filter
         one_iter_layer1_params = layer_1_bml_observable_biomarkers(design_matrix=last_design_matrix, imputed_biomarkers_matrix=last_biomarkers_matrix,
                                                                    current_mean_matrix=last_mean_matrix, prior_precision_matrix=prior_precision_matrix, prior_scale_matrix=prior_scale_matrix, dof = dof)
         one_iter_layer2_params = layer_2_imputed_biomarkers_multivar_model(first_layer_params=one_iter_layer1_params, this_last_observables_cov_fixed=this_initial_covariance, ou_matrices=processed_last_OU_matrices,
@@ -538,10 +537,21 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
         last_Q = one_iter_layer2_params["current_Q"]
         last_R = one_iter_layer2_params["current_R"]
 
-
-
         this_initial_latent_state = one_iter_layer2_params["smoothed_latent_states"][0]
         this_initial_covariance = one_iter_layer2_params["smoothed_latent_state_covs"][0]
+
+        #----Gradient Boosted Regression Tree for Inference of PPGR from diet data
+
+        for i, patient_diet_data in enumerate(all_diet_data.values()):
+            diet_data_concat = np.concatenate(patient_diet_data, axis = 0)
+
+
+
+            this_GBRT = GradientBoostingRegressor()
+            patient_iAUCs = np.array(all_iAUCs[i]).ravel()
+
+            this_GBRT.fit(X = diet_data_concat, y = patient_iAUCs)
+            params = this_GBRT.get_params()
 
 
 
@@ -550,7 +560,7 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
                         "Process_Cov": last_Q, "Measurement_Cov": last_R}
     print(converged_params)
     return converged_params
-def process_data_and_build_HBM(these_dataframes, model_priors_and_config_handle, these_raw_frames):
+def process_data_and_build_HBM(these_dataframes, model_priors_and_config_handle, these_raw_frames, patients_diet_data, patients_treatment_data, patients_iAUCs):
     this_ism, this_ids, this_ibm, this_control_tensor, dataframe_column_names_ordered = process_dataframes_for_model(these_dataframes, these_raw_frames)
     this_control_statistics_matrices = control_diagnostics(this_control_tensor, dataframe_column_names_ordered)
 
@@ -577,9 +587,10 @@ def process_data_and_build_HBM(these_dataframes, model_priors_and_config_handle,
     last_OU_matrices = {"State_Matrix_OU": model_priors_and_config["State_Matrix_OU"], "Wiener_Matrix_OU": model_priors_and_config["Wiener_Matrix_OU"]}  # placeholder
 
     this_fit_model = fit_HBM_model(initial_severities_matrix = this_ism, initial_design_matrix=this_ids, initial_biomarkers_matrix=this_ibm,
-                                    prior_mean_matrix=this_pmm, prior_precision_matrix=this_ppm, prior_scale_matrix=this_pcm,
-                                    dof = prior_dof, initial_2nd_layer_cov_mat=this_2nd_cov, initial_2nd_layer_mean_mat= this_2nd_mean,
-                                    initial_2nd_layer_coeff_mat=this_2nd_coeff_matrix, last_OU_matrices=last_OU_matrices,
-                                    initial_F=initial_ls_ev_f, initial_A=initial_imp_map_A, initial_Q=initial_q_process_noise, initial_R=initial_r_measurement_noise)
+                                   prior_mean_matrix=this_pmm, prior_precision_matrix=this_ppm, prior_scale_matrix=this_pcm,
+                                   dof = prior_dof, initial_2nd_layer_cov_mat=this_2nd_cov, initial_2nd_layer_mean_mat= this_2nd_mean,
+                                   initial_2nd_layer_coeff_mat=this_2nd_coeff_matrix, last_OU_matrices=last_OU_matrices,
+                                   initial_F=initial_ls_ev_f, initial_A=initial_imp_map_A, initial_Q=initial_q_process_noise, initial_R=initial_r_measurement_noise,
+                                   all_diet_data=patients_diet_data, all_treatment_data=patients_treatment_data, all_iAUCs=patients_iAUCs)
 
     return this_fit_model

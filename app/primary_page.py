@@ -12,7 +12,7 @@ from matplotlib import pyplot as plt
 import json
 import numpy as np
 import pandas as pd
-from acne_model import data_parsing, model_building
+from acne_model import data_parsing_data_driven, model_building
 from scipy.stats import beta
 from acne_model.model_data_driven import state_evolution_vv as evolution_function
 from acne_model.model_data_driven import reparameterize
@@ -55,7 +55,7 @@ def fetch_default_json(this_url = "https://raw.githubusercontent.com/Nathaniel-W
 def calling_model():
     this_json = fetch_default_json()
     this_raw_data_name = fetch_default_datasets()
-    data_returns = data_parsing(this_raw_data_name, norm_column_start_frame1=6, norm_column_end_frame1=6) #given default dataset
+    data_returns = data_parsing_data_driven(this_raw_data_name, norm_column_start_frame1=6, norm_column_end_frame1=6) #given default dataset
     these_averages = data_returns[5]
     these_dirichlets = data_returns[6]
     these_empirical_trans_matrices = data_returns[7]

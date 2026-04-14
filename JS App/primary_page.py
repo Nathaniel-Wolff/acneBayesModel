@@ -3,7 +3,7 @@ import streamlit as st
 from matplotlib import pyplot as plt
 import json
 import numpy as np
-from acne_model import data_parsing, model_building
+from acne_model import data_parsing_data_driven, model_building
 from scipy.stats import beta
 from acne_model.model import state_evolution_vv as evolution_function
 from acne_model.model import reparameterize
@@ -16,7 +16,7 @@ st.set_page_config(layout = "wide")
 
 #calling the model with test dataset
 def calling_model(this_raw_data_name, json_name):
-    data_returns = data_parsing(this_raw_data_name)
+    data_returns = data_parsing_data_driven(this_raw_data_name)
     these_averages = data_returns[5]
     these_dirichlets = data_returns[6]
     these_empirical_trans_matrices = data_returns[7]

@@ -50,13 +50,14 @@ def separate_patients(raw_data):
 
 def separate_patients_diet_data(raw_data):
     """Function that separates the dataframe containing patient daily diet tracking and treatment frequency/dosage data.
-     Uses some harcoded column names, but this can be made configurable by the user in later versions."""
+     Uses some hardcoded column names, but this can be made configurable by the user in later versions."""
     patient_frames = [group for _, group in raw_data.groupby("Patient_ID")]
     meal_columns_and_day = ["Day", "Fiber (g)", "Carbs (g)", "Protein (g)", "Sat Fat (g)", "Unsat Fat (g)", "Water (mL)",
                "Sodium (g)"]
     treatment_columns_and_day = ["Day", "ClPhos-BPO (g)", "Isotret (g)"]
 
     patients_meals_tensor = defaultdict(list)
+    patients_iAUCs = []
     patients_treatments_tensor = defaultdict(list)
 
     for patient_frame in patient_frames:
@@ -66,11 +67,14 @@ def separate_patients_diet_data(raw_data):
         days_worth_meals_matrices = [group.drop(columns = ["Day"]).to_numpy() for _, group in meal_data.groupby("Day")]
         patients_meals_tensor[patient_ID] = days_worth_meals_matrices
 
+        iAUCs = patient_frame["iAUC"].to_numpy()
+        patients_iAUCs.append(iAUCs)
+
         #redundant given all patients have the same treatment series, but could be different theoretically
         days_worth_treatments_matrix = np.concatenate([group.drop(columns = ["Day"]).to_numpy() for _, group in treatment_data.groupby("Day")], axis = 0)
         patients_treatments_tensor[patient_ID] = days_worth_treatments_matrix
 
-    return patients_meals_tensor, patients_treatments_tensor
+    return patients_meals_tensor, patients_treatments_tensor, patients_iAUCs
 
 def normalize_dataframe_w_baseline(dataframe, start_column_index, end_column_index, end_row_bl):
     """Function for quick normalization of multiple dataframe columns relative to baseline, as used below."""
@@ -377,11 +381,10 @@ def build_transition_kernels(dirichlet_prior, dirichlets):
 
     return all_matrices
 
-def data_parsing(first_data_filename, second_data_filename, norm_column_start_frame1 = 7, norm_column_end_frame1 = 12):
+def data_parsing_data_driven(first_data_filename, norm_column_start_frame1 = 7, norm_column_end_frame1 = 12):
     """Function that does the data parsing, given a csv filename in the same directory.
     Now uses both csvs, one for biomarker data (SSM) and now the diet/covariates csv."""
     raw_data_first = pd.read_csv(first_data_filename)
-    raw_data_diet = pd.read_csv(second_data_filename)
     # actual implementation
     this_seperate_DFs, this_intro_days = separate_patients(raw_data_first)
     this_md_DFs, this_treatment_history, these_history_distributions, these_baselines = add_history_metadata(seperatePatientsDFs=this_seperate_DFs, allPatientsIntroDays=this_intro_days, start_column_index=norm_column_start_frame1, end_column_index=norm_column_end_frame1) #use correct column
@@ -395,19 +398,21 @@ def data_parsing(first_data_filename, second_data_filename, norm_column_start_fr
 
     these_Dirichlets, these_categories = build_Dirichlet(uninformative_prior, built_histograms)
 
-    this_diet_tensor, this_treatment_tensor = separate_patients_diet_data(raw_data_diet)
-
-
-
-
-
-
-
-
-
-    
     return this_treatment_history, these_assigned_md_DFs, these_states, these_ranges, this_md_DFs, these_state_averages, these_Dirichlets, built_transition_dict, transition_counts, this_seperate_DFs
 
+def data_parsing(first_data_filename, second_data_filename, norm_column_start_frame1 = 7, norm_column_end_frame1 = 12):
+    """Function that does the data parsing, given a csv filename in the same directory.
+    Now uses both csvs, one for biomarker data (SSM) and now the diet/covariates csv."""
+    raw_data_first = pd.read_csv(first_data_filename)
+    raw_data_diet = pd.read_csv(second_data_filename)
+
+    this_seperate_DFs, this_intro_days = separate_patients(raw_data_first)
+    this_norm_DFs, this_treatment_history, these_history_distributions, these_baselines = add_history_metadata(seperatePatientsDFs=this_seperate_DFs, allPatientsIntroDays=this_intro_days, start_column_index=norm_column_start_frame1, end_column_index=norm_column_end_frame1) #use correct column
+
+    #now includes diet data returns
+    this_diet_tensor, this_treatment_tensor, these_iAUCs = separate_patients_diet_data(raw_data_diet)
+
+    return this_norm_DFs, this_diet_tensor, this_treatment_tensor, these_iAUCs, this_seperate_DFs
 
 def data_parsing_web(url):
     pass
