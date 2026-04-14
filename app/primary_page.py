@@ -55,7 +55,7 @@ def fetch_default_json(this_url = "https://raw.githubusercontent.com/Nathaniel-W
 def calling_model():
     this_json = fetch_default_json()
     this_raw_data_name = fetch_default_datasets()
-    data_returns = data_parsing(this_raw_data_name, norm_column_start=6, norm_column_end=6) #given default dataset
+    data_returns = data_parsing(this_raw_data_name, norm_column_start_frame1=6, norm_column_end_frame1=6) #given default dataset
     these_averages = data_returns[5]
     these_dirichlets = data_returns[6]
     these_empirical_trans_matrices = data_returns[7]

@@ -9,7 +9,7 @@ from collections import defaultdict, Counter
 from scipy.stats import dirichlet
 import itertools
 
-def seperate_patients(raw_data):
+def separate_patients(raw_data):
     """Function that separates the raw dataframe via the following:
     1) Constructs an array tracking where the original date (2018-01-01) recurs.
     2) Uses that array to split raw_data into seperate dataframes.
@@ -48,6 +48,30 @@ def seperate_patients(raw_data):
     return seperatePatientsDFs, allPatientsIntroDays
 
 
+def separate_patients_diet_data(raw_data):
+    """Function that separates the dataframe containing patient daily diet tracking and treatment frequency/dosage data.
+     Uses some harcoded column names, but this can be made configurable by the user in later versions."""
+    patient_frames = [group for _, group in raw_data.groupby("Patient_ID")]
+    meal_columns_and_day = ["Day", "Fiber (g)", "Carbs (g)", "Protein (g)", "Sat Fat (g)", "Unsat Fat (g)", "Water (mL)",
+               "Sodium (g)"]
+    treatment_columns_and_day = ["Day", "ClPhos-BPO (g)", "Isotret (g)"]
+
+    patients_meals_tensor = defaultdict(list)
+    patients_treatments_tensor = defaultdict(list)
+
+    for patient_frame in patient_frames:
+        patient_ID = patient_frame["Patient_ID"].iloc[0]
+        meal_data = patient_frame.filter(meal_columns_and_day)
+        treatment_data = patient_frame.filter(treatment_columns_and_day)
+        days_worth_meals_matrices = [group.drop(columns = ["Day"]).to_numpy() for _, group in meal_data.groupby("Day")]
+        patients_meals_tensor[patient_ID] = days_worth_meals_matrices
+
+        #redundant given all patients have the same treatment series, but could be different theoretically
+        days_worth_treatments_matrix = np.concatenate([group.drop(columns = ["Day"]).to_numpy() for _, group in treatment_data.groupby("Day")], axis = 0)
+        patients_treatments_tensor[patient_ID] = days_worth_treatments_matrix
+
+    return patients_meals_tensor, patients_treatments_tensor
+
 def normalize_dataframe_w_baseline(dataframe, start_column_index, end_column_index, end_row_bl):
     """Function for quick normalization of multiple dataframe columns relative to baseline, as used below."""
     the_dataframe = dataframe.copy()
@@ -60,8 +84,6 @@ def normalize_dataframe_w_baseline(dataframe, start_column_index, end_column_ind
     new_normalized_part = ((to_normalize - baseline_means) / baseline_means) * 100 #changed, check this later
 
     remerged = pd.concat([beginning, new_normalized_part, last_part], axis=1)
-
-    print(remerged)
 
     return remerged
 def add_history_metadata(seperatePatientsDFs, allPatientsIntroDays, start_column_index = 7, end_column_index = 12):
@@ -355,12 +377,14 @@ def build_transition_kernels(dirichlet_prior, dirichlets):
 
     return all_matrices
 
-def data_parsing(data_filename, norm_column_start = 7, norm_column_end = 12):
-    """Function that does the data parsing, given a csv filename in the same directory."""
-    raw_data = pd.read_csv(data_filename)
+def data_parsing(first_data_filename, second_data_filename, norm_column_start_frame1 = 7, norm_column_end_frame1 = 12):
+    """Function that does the data parsing, given a csv filename in the same directory.
+    Now uses both csvs, one for biomarker data (SSM) and now the diet/covariates csv."""
+    raw_data_first = pd.read_csv(first_data_filename)
+    raw_data_diet = pd.read_csv(second_data_filename)
     # actual implementation
-    this_seperate_DFs, this_intro_days = seperate_patients(raw_data)
-    this_md_DFs, this_treatment_history, these_history_distributions, these_baselines = add_history_metadata(seperatePatientsDFs=this_seperate_DFs, allPatientsIntroDays=this_intro_days, start_column_index=norm_column_start, end_column_index=norm_column_end) #use correct column
+    this_seperate_DFs, this_intro_days = separate_patients(raw_data_first)
+    this_md_DFs, this_treatment_history, these_history_distributions, these_baselines = add_history_metadata(seperatePatientsDFs=this_seperate_DFs, allPatientsIntroDays=this_intro_days, start_column_index=norm_column_start_frame1, end_column_index=norm_column_end_frame1) #use correct column
     these_states, these_ranges = find_and_plot_severity_states(this_md_DFs)
     these_assigned_md_DFs, these_state_averages = assign_states_to_mdfs(this_md_DFs, these_states, these_ranges)
 
@@ -370,8 +394,20 @@ def data_parsing(data_filename, norm_column_start = 7, norm_column_end = 12):
 
 
     these_Dirichlets, these_categories = build_Dirichlet(uninformative_prior, built_histograms)
+
+    this_diet_tensor, this_treatment_tensor = separate_patients_diet_data(raw_data_diet)
+
+
+
+
+
+
+
+
+
     
     return this_treatment_history, these_assigned_md_DFs, these_states, these_ranges, this_md_DFs, these_state_averages, these_Dirichlets, built_transition_dict, transition_counts, this_seperate_DFs
+
 
 def data_parsing_web(url):
     pass

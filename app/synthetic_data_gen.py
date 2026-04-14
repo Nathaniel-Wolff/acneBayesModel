@@ -149,21 +149,21 @@ def generate_HBM_additional_data(out_name, num_patients = 10, num_blocks = 5, da
 
             for meal_index in range(3): #also using to set treatment
                 fiber = np.random.normal( (1 + .2 * meal_index) * p_mean_fiber , 2.0) #fiber increases somewhat throughout the day
-                carbs = np.random.normal(p_mean_carbs, 2.0) if meal_index > 0 else  np.random.normal(p_mean_carbs * 1.4, 2.0)#breakfasts tend to be carb heavy
+                carbs = np.random.normal(p_mean_carbs, 2.0) if meal_index > 0 else np.random.normal(p_mean_carbs * 1.4, 2.0)#breakfasts tend to be carb heavy
                 protein = np.random.normal(p_mean_protein, 2.0)
                 sat_fat = np.random.normal(p_mean_sat_fat, 2.0)
                 unsat_fat = np.random.normal(p_mean_unsat_fat, 2.0)
                 sodium = np.random.normal(p_mean_sodium * (1 + .1 * meal_index), .1) #typically less salt early in the day, more later from unhealthy snacks
                 water = np.random.normal(p_mean_water, 10)
-                iAUC = np.random.normal(p_mean_iAUC, .3) #decently high stdev
+                iAUC = np.abs(np.random.normal(p_mean_iAUC, .3))#decently high stdev, enforcing positivity
 
-                clin_dose = base_dose_ClPhos_BPO_topical * np.power(1.25, day_index) if (meal_index == 0 or meal_index == 2) and day_index > 1 else 0
-                isotret_dose = base_dose_isotret_oral * np.power(1.25, day_index) if (meal_index == 0 or meal_index == 2) and day_index > 1 else 0
+                clin_dose = base_dose_ClPhos_BPO_topical * np.power(1.25, day_index) if meal_index == 0 or meal_index == 2 else 0
+                isotret_dose = base_dose_isotret_oral * np.power(1.25, day_index) if meal_index == 0 or meal_index == 2 else 0
 
                 all_data.append([
-                    p, day, round(clin_dose, 2), round(isotret_dose, 2), round(fiber, 2),
-                    round(carbs, 2), round(protein, 2), round(sat_fat, 2),
-                    round(unsat_fat, 2), round(sodium, 2), round(water, 2), round(iAUC)
+                    p, day, round(clin_dose, 4), round(isotret_dose, 4), round(fiber, 4),
+                    round(carbs, 4), round(protein, 4), round(sat_fat, 4),
+                    round(unsat_fat, 4), round(sodium, 2), round(water, 2), round(iAUC, 4)
                 ])
     frame = pd.DataFrame(all_data, columns=columns)
     frame.to_csv(out_name, index=False)
