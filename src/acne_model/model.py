@@ -3,6 +3,7 @@
 import pandas as pd
 import numpy as np
 from numpy.linalg import pinv
+from collections import defaultdict
 from functools import reduce
 import json
 from scipy.stats import invwishart, multivariate_normal
@@ -10,8 +11,10 @@ from scipy.linalg import eigvals, solve_continuous_lyapunov
 from scipy.stats import entropy
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import GradientBoostingRegressor
+import jax.numpy as jnp
+from jax import jacfwd
 
-def layer_1_bml_observable_biomarkers(design_matrix, imputed_biomarkers_matrix, current_mean_matrix, prior_precision_matrix, prior_scale_matrix, dof):
+def layer_2_bml_observable_biomarkers(design_matrix, imputed_biomarkers_matrix, current_mean_matrix, prior_precision_matrix, prior_scale_matrix, dof):
     """Solves for the multivariate normal distribution between imputed biomarker vectors and observed clinical biomarkers.
     Priors for covariance between components, between observed imputed biomarkers pairwise, and
     coefficient matrices can be specified, otherwise uniformative priors are used."""
@@ -119,7 +122,7 @@ def compute_cross_layer_moments(layer_2_mapping, all_within_layers_moments, firs
     cross_layer_lagged_moments = {"joint_covariance_z_y": joint_covariance_z_y, "cross_layer_moment": cross_layer_moment }
 
     return cross_layer_lagged_moments
-def layer_2_imputed_biomarkers_multivar_model(first_layer_params, this_last_observables_cov_fixed, this_last_mean, this_last_coeff_matrix, ou_matrices, current_ls_ev_F, current_imp_map_A, last_initial_state, current_process_noise_cov, current_measurement_noise_cov, Q_prior,
+def layer_3_imputed_biomarkers_multivar_model(first_layer_params, this_last_observables_cov_fixed, this_last_mean, this_last_coeff_matrix, ou_matrices, current_ls_ev_F, current_imp_map_A, last_initial_state, current_process_noise_cov, current_measurement_noise_cov, Q_prior,
                                               tikh_reg_term):
     """Fits layer 2 of the imputed biomarker multivariate model. Implements one iteration of EM."""
     # ends with learning the relative contributions of the imputed biomarkers to total bacterial dysbiosis, total sebum production, total inflammation
@@ -156,7 +159,7 @@ def layer_2_imputed_biomarkers_multivar_model(first_layer_params, this_last_obse
     #final_cov_matrix_maximized = cov_matrix_maximized + this_OU_index_matrix
 
     return this_maximization
-def backpropagate_KG_to_layer_1(design_matrix, innovations, innovation_covs, last_W, learning_rate = 1e-5):
+def backpropagate_KG_to_layer_2(design_matrix, innovations, innovation_covs, last_W, learning_rate = 1e-5):
     first_grad_term = np.linalg.pinv(innovation_covs[0]) @ innovations[0].reshape(-1, 1) @ design_matrix[0].reshape(1, -1)
 
     ll_grad_wrt_layer_1 = np.zeros((first_grad_term.shape[0], first_grad_term.shape[1]))
@@ -167,7 +170,7 @@ def backpropagate_KG_to_layer_1(design_matrix, innovations, innovation_covs, las
     new_W = last_W - learning_rate * ll_grad_wrt_layer_1.T
     return new_W
 def all_layers_expectation_step(imputed_biomarkers_matrix, last_ls_ev_F, last_imp_map_A, last_initial_latent_state, last_process_cov,
-                                last_process_noise_cov, last_measurement_noise_cov, epsilon = 1e-9):
+                                last_process_noise_cov, last_measurement_noise_cov, ode_jacobian, epsilon = 1e-9):
     #computing first and second moments for layer 2
     #conducts all k Kalman filter/smoothings for the latent biological state z_{t} = [B_t, I_t, S_t]
     """Follows this latent state evolution model: z_{t+1) = F(z_{t}) + B(u_{t}) + w_{k}; w_{k} ~ N(0, Q)
@@ -292,7 +295,7 @@ def full_maximization_step_HBM(latent_states, smoothed_covariances, lagged_covar
         new_measurement_cov_R += one_term
 
     new_measurement_cov_R /= T #fixed with normalization
-    new_W = backpropagate_KG_to_layer_1(design_matrix=first_layer_params["design_matrix"], innovations=innovations, innovation_covs=innovation_covs, last_W=first_layer_params["post_mean_matrix"])
+    new_W = backpropagate_KG_to_layer_2(design_matrix=first_layer_params["design_matrix"], innovations=innovations, innovation_covs=innovation_covs, last_W=first_layer_params["post_mean_matrix"])
 
     # forcing symmetry and positivity to improve convergence
     new_ls_ev_F_enforced = 0.5 * (new_ls_ev_F + new_ls_ev_F.T)
@@ -323,8 +326,11 @@ def full_maximization_step_HBM(latent_states, smoothed_covariances, lagged_covar
                         "current_W": new_W, "smoothed_latent_states": latent_states, "smoothed_latent_state_covs": smoothed_covariances}
 
     return maximized_params
-def layer_3_latent_state_severity_mapping(maximized_mean):
-    mapping = 0
+def layer_4_latent_state_severity_mapping(maximized_mean, treatment_series, diet_data, weights = np.array, biases = np.array):
+    latent_state = treatment_diet_mapping()
+    mean = np.exp(weights @ latent_state + biases)
+
+
     #need to use the normal posterior mean from layer 2 as the likelihood for the gamma
 def check_spectral_radius(A):
     """To improve numerical instability, this function calculates the spectral radius of one of the mappings used.
@@ -348,7 +354,6 @@ def univariate_gaussian(mean, std_dev, dof):
     coefficient = 1 / (std_dev * np.sqrt(2 * np.pi))
     exponent = -((dof - mean) ** 2) / (2 * std_dev ** 2)
     return coefficient * np.exp(exponent)
-
 def multivar_Ornstein_Uhlenbeck(state_matrix, diffusion_matrix):
     """Uses the solution to the Fokker-Plank equation  to approximate the transition probability of realization of the OU process
     asserted to comprise remainder of latent state. Is multivariate.
@@ -371,7 +376,6 @@ def multivar_Ornstein_Uhlenbeck(state_matrix, diffusion_matrix):
         return True, lyanpunov_soln
     except Exception as e:
         return False, str(e)
-
 def process_dataframes_for_model(dataframes, raw_frames, K_d_insulin = 4.0, K_d_IGF1 = 1.0, gaussian_weights = [1/3, 1/3, 1/3],
                                  gaussian_params = [[4.0, 0.5], [5.5, 0.5], [7.6, 0.5]], control_rows = 28):
     """Function that processes dataframes into matrices in the right format for EM passage. Relies on formatting
@@ -477,6 +481,46 @@ def control_diagnostics(control_tensor, dataframe_names):
     return control_statistics_as_dict
 def normalize_matrix_columnwise(M):
     return (M - np.mean(M, axis=0)) / np.std(M, axis=0)
+
+
+
+def ur_isotret(k_12, alpha, beta, t):
+    """Function to calculate isotretinoin unit response in bioavaiable concentration relative to 1 gram dose."""
+    slope = k_12/(alpha - beta)
+    return slope * (np.exp(-beta * t) - np.exp(-alpha * t)) #t is in hours, discretized to 12 hour periods
+
+def find_C2_isotret(k_12, alpha, beta, dose_amt, dt): #dt is in hours, discretized to 12 hour periods
+    """Function to calculate current peripheral concentration of isotretinoin via the unit response above."""
+
+    return dose_amt * ur_isotret(k_12, alpha, beta, dt)
+def treatment_diet_mapping(params, T_raw, PPGR_trained, diet_data, c_leu, current_time = 0, ss_concs = np.zeros(3)):
+    """Function mapping raw treatment dosages and diet covariate to latent state, V(T_j, Phi_{i, j})."""
+    #T_raw is previously zipped with treatment names in order.
+    #need to account for molar ratios here since using gram weights with percentages. Do this later.
+    k_clin_bioa, k_hydrolysis, k_elim_clin  = params["k_clin_bioa"], params["k_hydrolysis"], params["k_elim_clin"]
+    k_bpo_bioa, vmax_hlyt, K_max, k_elim_BPO =  params["k_bpo_bioa"], params["vmax_hlyt"], params["K_max"], params["k_elim_BPO"]
+    k_12, alpha, beta, = params["k_12"], params["alpha"], params["beta"]
+
+
+    bioa_clin = k_clin_bioa * k_hydrolysis * T_raw["ClPhos-BPO (g)"] - k_elim_clin * ss_concs["Clin"]
+    bioa_BPO = k_bpo_bioa * ( (vmax_hlyt * T_raw["ClPhos-BPO (g)"]) / (K_max + T_raw["ClPhos-BPO (g)"])) - k_elim_BPO * ss_concs["BPO"]
+    bioa_isotret = find_C2_isotret(k_12 = k_12, alpha = alpha, beta = beta, dose_amt=T_raw["Isotret (g)"], dt = current_time)
+
+    now_bioa_clin = ss_concs["Clin"] + bioa_clin
+    now_bioa_BPO = ss_concs["BPO"] + bioa_BPO
+    now_bioa_isotret = ss_concs["Isotret"] + bioa_isotret
+
+    T_j = np.array( [now_bioa_clin, now_bioa_BPO, now_bioa_isotret])
+    PPGR_effective = PPGR_trained.predict(diet_data)
+    phi = [PPGR_effective, c_leu]
+
+    return T_j, phi
+def treatment_diet_mapping_jacobian(c_clind_SS, c_clind_phos, T_raw, params, ss_concs):
+   jacobian = jacfwd(treatment_diet_mapping, argnums=0)
+   return jacobian
+
+
+
 def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biomarkers_matrix,
                   prior_mean_matrix, prior_precision_matrix, prior_scale_matrix, initial_2nd_layer_cov_mat, initial_2nd_layer_mean_mat,
                   initial_2nd_layer_coeff_mat, last_OU_matrices, initial_F, initial_A, initial_Q, initial_R, all_diet_data, all_treatment_data, all_iAUCs,
@@ -505,7 +549,6 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
     initial_A += np.random.normal(0, 0.05, (3, 3))
     #immediate masking
     last_A = mask_A_mechanistically(initial_A)
-    #print("starting", last_A)
 
     last_Q = initial_Q
     last_R = initial_R
@@ -513,19 +556,30 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
     processed_last_OU_matrices = {"State_Matrix_OU": last_OU_matrices["State_Matrix_OU"] * np.identity(last_biomarkers_matrix.shape[1]),
                                   "Wiener_Matrix_OU": last_OU_matrices["Wiener_Matrix_OU"] * np.identity(last_biomarkers_matrix.shape[1])}
 
-
-
-
     this_initial_latent_state = np.linalg.pinv(initial_A) @ last_biomarkers_matrix[0]
     this_initial_covariance = np.eye(3) * 0.1 #fixed
 
+    PPGR_predictor_GBRTs = defaultdict(GradientBoostingRegressor)
 
+    # ----Gradient Boosted Regression Tree for Inference of PPGR from diet data
+    # Currently frozen for now, later will be optimized with rest
 
+    for i, one_patient_diet_data in enumerate(all_diet_data.values()):
+        diet_data_concat = np.concatenate(one_patient_diet_data, axis=0)
+
+        this_GBRT = GradientBoostingRegressor()
+        patient_iAUCs = np.array(all_iAUCs[i]).ravel()
+
+        this_GBRT.fit(X=diet_data_concat, y=patient_iAUCs)
+        PPGR_predictor_GBRTs[list(all_diet_data.keys())[i]] = this_GBRT.fit(X=diet_data_concat,
+                                                                            y=patient_iAUCs)  # maintaining patient ID
+
+    #----EM Loop
     for em_epoch in range(max_epochs):
         #----Kalman Filter
-        one_iter_layer1_params = layer_1_bml_observable_biomarkers(design_matrix=last_design_matrix, imputed_biomarkers_matrix=last_biomarkers_matrix,
+        one_iter_layer1_params = layer_2_bml_observable_biomarkers(design_matrix=last_design_matrix, imputed_biomarkers_matrix=last_biomarkers_matrix,
                                                                    current_mean_matrix=last_mean_matrix, prior_precision_matrix=prior_precision_matrix, prior_scale_matrix=prior_scale_matrix, dof = dof)
-        one_iter_layer2_params = layer_2_imputed_biomarkers_multivar_model(first_layer_params=one_iter_layer1_params, this_last_observables_cov_fixed=this_initial_covariance, ou_matrices=processed_last_OU_matrices,
+        one_iter_layer2_params = layer_3_imputed_biomarkers_multivar_model(first_layer_params=one_iter_layer1_params, this_last_observables_cov_fixed=this_initial_covariance, ou_matrices=processed_last_OU_matrices,
                                                                            this_last_mean=last_2nd_layer_mean_matrix, this_last_coeff_matrix=last_2nd_layer_coeff_matrix, current_ls_ev_F=last_F, current_imp_map_A=last_A,
                                                                            current_measurement_noise_cov=last_Q, current_process_noise_cov=last_R, last_initial_state=this_initial_latent_state, Q_prior = initial_Q, tikh_reg_term = tikh_reg_term)
 
@@ -540,25 +594,11 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
         this_initial_latent_state = one_iter_layer2_params["smoothed_latent_states"][0]
         this_initial_covariance = one_iter_layer2_params["smoothed_latent_state_covs"][0]
 
-        #----Gradient Boosted Regression Tree for Inference of PPGR from diet data
-
-        for i, patient_diet_data in enumerate(all_diet_data.values()):
-            diet_data_concat = np.concatenate(patient_diet_data, axis = 0)
-
-
-
-            this_GBRT = GradientBoostingRegressor()
-            patient_iAUCs = np.array(all_iAUCs[i]).ravel()
-
-            this_GBRT.fit(X = diet_data_concat, y = patient_iAUCs)
-            params = this_GBRT.get_params()
-
-
-
 
     converged_params = {"1st_Layer_Coeffs": last_mean_matrix, "LS_Evolution_F": last_F, "Imputed_Mapping_A": last_A,
                         "Process_Cov": last_Q, "Measurement_Cov": last_R}
-    print(converged_params)
+
+
     return converged_params
 def process_data_and_build_HBM(these_dataframes, model_priors_and_config_handle, these_raw_frames, patients_diet_data, patients_treatment_data, patients_iAUCs):
     this_ism, this_ids, this_ibm, this_control_tensor, dataframe_column_names_ordered = process_dataframes_for_model(these_dataframes, these_raw_frames)
