@@ -12,7 +12,8 @@ from matplotlib import pyplot as plt
 import json
 import numpy as np
 import pandas as pd
-from acne_model.model_data_driven import data_parsing_data_driven, model_building
+from acne_model.raw_data_analysis import data_parsing_data_driven
+from acne_model.model_data_driven import model_building
 from scipy.stats import beta
 from acne_model.model_data_driven import state_evolution_vv as evolution_function
 from acne_model.model_data_driven import reparameterize
