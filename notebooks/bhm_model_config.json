@@ -24,7 +24,10 @@
   "k_12": 0.001,
   "k_elim_isotret": 3.00,
   "alpha": 0.1,
-  "beta": 0.2
+  "beta": 0.2,
+  "initial_alpha": 3.0,
+  "initial_M": [0.2, 0.2, 0.2],
+  "initial_b": 1.10
 
 
 

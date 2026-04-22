@@ -90,6 +90,21 @@ def normalize_dataframe_w_baseline(dataframe, start_column_index, end_column_ind
     remerged = pd.concat([beginning, new_normalized_part, last_part], axis=1)
 
     return remerged
+
+def normalize_dataframe_w_baseline_other(dataframe, start_column_index, end_column_index, end_row_bl):
+    """Function for quick normalization of multiple dataframe columns relative to baseline, as used below."""
+    the_dataframe = dataframe.copy()
+
+    beginning = the_dataframe.iloc[:, 0:start_column_index]
+    to_normalize = the_dataframe.iloc[:, start_column_index: end_column_index + 1]
+    last_part = the_dataframe.iloc[:, end_column_index + 1:]
+
+    baseline_means = to_normalize.iloc[:end_row_bl].mean()
+    new_normalized_part = to_normalize / baseline_means #changed to be precentages relative to baseline
+
+    remerged = pd.concat([beginning, new_normalized_part, last_part], axis=1)
+
+    return remerged
 def add_history_metadata(seperatePatientsDFs, allPatientsIntroDays, start_column_index = 7, end_column_index = 12):
     """Function that adds a treatment history metadata column to each patient's dataframe by...
     1) Loading each seperate patient's dataframe and compute the average baseline severity, normalizing acne severity scores. Then modifies the dataframe, called a severities dataframe.

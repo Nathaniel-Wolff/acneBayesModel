@@ -1,5 +1,6 @@
 #for training of actual model (continous Latent State Space/BHM)
 
+from .raw_data_analysis import normalize_dataframe_w_baseline_other as normalize
 import pandas as pd
 import numpy as np
 from numpy.linalg import pinv
@@ -13,7 +14,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import GradientBoostingRegressor
 import jax
 import jax.numpy as jnp
-from jax import jit, jacfwd
+from jax import jit, jacfwd, grad, value_and_grad
 from jax.lax import scan
 from matplotlib import pyplot as plt
 
@@ -172,13 +173,14 @@ def compute_cross_layer_moments(layer_2_mapping, all_within_layers_moments, firs
 
     return cross_layer_lagged_moments
 def layer_3_imputed_biomarkers_multivar_model(first_layer_params, this_last_observables_cov_fixed, this_last_mean, this_last_coeff_matrix, ou_matrices, current_ls_ev_F, current_imp_map_A, current_G_map, last_initial_state, current_process_noise_cov, current_measurement_noise_cov, Q_prior,
-                                              treatment_data, treatment_params, tikh_reg_term):
+                                              treatment_data, treatment_params, tikh_reg_term, M, b, alpha, severities):
     """Fits layer 2 of the imputed biomarker multivariate model. Implements one iteration of EM."""
     # ends with learning the relative contributions of the imputed biomarkers to total bacterial dysbiosis, total sebum production, total inflammation
     usable_imputeds_matrix = first_layer_params["imputed_biomarkers_matrix"]
     #---Expectation Step
     expectation_results = all_layers_expectation_step(last_ls_ev_F=current_ls_ev_F, last_G_map = current_G_map, last_imp_map_A= current_imp_map_A, last_process_noise_cov=current_process_noise_cov, last_measurement_noise_cov=current_measurement_noise_cov,
-                                                      imputed_biomarkers_matrix=usable_imputeds_matrix, last_initial_latent_state=last_initial_state, last_process_cov= this_last_observables_cov_fixed, treatment_data = treatment_data, treatment_params=treatment_params)
+                                                      imputed_biomarkers_matrix=usable_imputeds_matrix, last_initial_latent_state=last_initial_state, last_process_cov= this_last_observables_cov_fixed, treatment_data = treatment_data, treatment_params=treatment_params,
+                                                      M = M, b = b, alpha = alpha, severities = severities)
 
     unpacked_latent_states  = expectation_results["smoothed_latent_states"]
     latent_state_covs = expectation_results["smoothed_latent_state_covs"]
@@ -187,6 +189,9 @@ def layer_3_imputed_biomarkers_multivar_model(first_layer_params, this_last_obse
     these_innovations = expectation_results["innovations"]
     these_innovation_covs = expectation_results["innovation_covs"]
     unpacked_treatment_ODE_results = expectation_results["treatment_ode_outputs"]
+
+    carried_forwards = {"intercept": expectation_results["intercept"], "current_steady_state_concs": expectation_results["current_steady_state_concs"], "patient_drug_data": expectation_results["patient_drug_data"],
+               "M": expectation_results["M"], "b": expectation_results["b"], "alpha": expectation_results["alpha"]}
 
     current_ll = calculate_log_likelihood(these_innovations,these_innovation_covs)
 
@@ -210,7 +215,7 @@ def layer_3_imputed_biomarkers_multivar_model(first_layer_params, this_last_obse
 
     #final_cov_matrix_maximized = cov_matrix_maximized + this_OU_index_matrix
 
-    return this_maximization, latent_state_resids, current_ll
+    return this_maximization, latent_state_resids, current_ll, carried_forwards
 def backpropagate_KG_to_layer_2(design_matrix, innovations, innovation_covs, last_W, learning_rate = 1e-5):
     first_grad_term = np.linalg.pinv(innovation_covs[0]) @ innovations[0].reshape(-1, 1) @ design_matrix[0].reshape(1, -1)
 
@@ -221,30 +226,96 @@ def backpropagate_KG_to_layer_2(design_matrix, innovations, innovation_covs, las
 
     new_W = last_W - learning_rate * ll_grad_wrt_layer_1.T
     return new_W
+
+
+def kf_forward_pass(treatment_params, imputed_biomarkers_matrix, last_ls_ev_F, last_imp_map_A, last_G_map, M, b, alpha, observations,
+                                last_process_noise_cov, last_measurement_noise_cov, current_steady_state_concs, patient_drug_data,
+                     intercept, last_a_post_estimate, last_a_post_cov_est, epsilon = 1e-9):
+    num_steps = len(imputed_biomarkers_matrix)
+
+    a_priori_latent_states = jnp.zeros((num_steps, 3))
+    a_priori_covs = jnp.zeros((num_steps, 3, 3))
+    a_post_covs = jnp.zeros((num_steps, 3, 3))
+    a_post_latent_states = jnp.zeros((num_steps, 3))
+
+    innovations = jnp.zeros((num_steps, 3))
+    treatment_ODE_outputs = jnp.zeros((num_steps, 3))
+    latent_state_resids = jnp.zeros((num_steps, 3))
+
+    latent_state_covs = jnp.zeros((num_steps, 3, 3))
+    innovation_covs = jnp.zeros((num_steps, 3, 3))
+    kalman_gains = jnp.zeros((num_steps, 3, 3))
+
+    smoothing_gains = jnp.zeros((num_steps - 1, 3, 3))
+
+    all_states = jnp.zeros((num_steps, 3))
+    curr_ss = current_steady_state_concs
+
+    total_nll = 0
+
+    for iteration in range(0, len(imputed_biomarkers_matrix)):
+        #---Prediction Step
+
+        T_j_val, T_j_jac = treatment_diet_mapping_ODE(treatment_params, patient_drug_data, iteration, current_steady_state_concs)
+        curr_ss = curr_ss + T_j_val
+        all_states = all_states.at[iteration].set(curr_ss) #updating steady state concentrations
+
+
+        a_priori_state = last_ls_ev_F @ last_a_post_estimate + last_G_map @ T_j_val #with treatment effect now included
+        a_priori_latent_states = a_priori_latent_states.at[iteration].set(a_priori_state)
+        a_priori_cov = last_ls_ev_F @ last_a_post_cov_est @ last_ls_ev_F.T + last_process_noise_cov
+        a_priori_covs = a_priori_covs.at[iteration].set(a_priori_cov)
+
+
+        #---Update Step
+        pred_imputed = last_imp_map_A @ a_priori_state + intercept #removed random noise realization, adding intercept term
+
+        innovation = imputed_biomarkers_matrix[iteration] - pred_imputed
+        innovation = jnp.clip(innovation, -10, 10) #clipped now to improve convergence
+        innovation_cov = last_imp_map_A @ a_priori_cov @ last_imp_map_A.T + last_measurement_noise_cov
+        innovation_cov += np.eye(innovation_cov.shape[0]) * epsilon #Tikhonov regularization to improve convergence
+
+        opt_Kal_gain = a_priori_cov @ last_imp_map_A.T @ np.linalg.pinv(innovation_cov) #corrected
+        kg_size = opt_Kal_gain.shape
+
+        a_post_state  = a_priori_state + opt_Kal_gain @ innovation
+
+        mean = jnp.exp(M @ (last_imp_map_A @ a_post_state) + b)
+        mean_safe = jnp.maximum(mean, 1e-5) #ensuring mean is nonzero
+        alpha_safe = jnp.maximum(alpha, 1.1) #ensuring alpha is nonzero
+
+
+        total_nll += -jnp.sum(jax.scipy.stats.gamma.logpdf(observations[iteration], alpha_safe, scale= mean_safe / alpha))
+
+
+        #changed to using Symmetrized Joseph Form to improve stability
+        IKH = np.identity(kg_size[0]) - opt_Kal_gain @ last_imp_map_A
+        a_post_cov = IKH @ a_priori_cov @ IKH.T + opt_Kal_gain @ last_measurement_noise_cov @ opt_Kal_gain.T
+        a_post_covs = a_post_covs.at[iteration].set(a_post_cov)
+        a_post_residual = pred_imputed - last_imp_map_A @ a_post_state
+
+        #computing smoothing gain explicitly
+        if iteration < len(imputed_biomarkers_matrix) - 1:
+            smoothing_gain =  last_a_post_cov_est @ last_ls_ev_F.T @ robust_inv(a_priori_cov) #using robust inversion with Tikh reg term
+            smoothing_gains = smoothing_gains.at[iteration].set(smoothing_gain)
+
+        a_post_latent_states = a_post_latent_states.at[iteration].set(a_post_state)
+        latent_state_covs = latent_state_covs.at[iteration].set(a_post_cov)
+        latent_state_resids = latent_state_resids.at[iteration].set(a_post_residual)
+        innovations = innovations.at[iteration].set(innovation)
+        innovation_covs = innovation_covs.at[iteration].set(innovation_cov)
+        kalman_gains = kalman_gains.at[iteration].set(opt_Kal_gain)
+
+    return a_post_latent_states, smoothing_gains, latent_state_covs, latent_state_resids, \
+        innovations, innovation_covs, kalman_gains, a_post_state, a_post_cov, a_priori_covs, \
+        a_post_covs, treatment_ODE_outputs, total_nll
 def all_layers_expectation_step(imputed_biomarkers_matrix, last_ls_ev_F, last_imp_map_A, last_G_map, last_initial_latent_state, last_process_cov,
-                                last_process_noise_cov, last_measurement_noise_cov, treatment_data, treatment_params, ode_jacobian = None, epsilon = 1e-9):
+                                last_process_noise_cov, last_measurement_noise_cov, treatment_data, treatment_params, M, b, alpha, severities, ode_jacobian = None, epsilon = 1e-9):
     #computing first and second moments for layer 2
     #conducts all k Kalman filter/smoothings for the latent biological state z_{t} = [B_t, I_t, S_t]
     """Follows this latent state evolution model: z_{t+1) = F(z_{t}) + B(u_{t}) + w_{k}; w_{k} ~ N(0, Q)
     and this imputed biomarker to latent state mapping: z_{t} = A(y_{t}) + v_{k};  v_{k} ~ N(0, R).
     """
-    a_priori_latent_states = []
-    a_priori_covs = []
-    a_post_covs = []
-    a_post_latent_states = []
-    innovations = []
-
-    treatment_ODE_outputs = []
-
-    latent_state_covs = []
-
-    innovation_covs = []
-    latent_state_resids = []
-    last_a_post_estimate = last_initial_latent_state
-    last_a_post_cov_est = last_process_cov
-
-    kalman_gains = []
-    smoothing_gains = []
 
     #calculating intercept term for predicted imputed biomarkers, ensuring scales of latent states and imputed biomarkers don't blow up covariance
     intercept = np.mean(imputed_biomarkers_matrix, axis=0)
@@ -256,70 +327,15 @@ def all_layers_expectation_step(imputed_biomarkers_matrix, last_ls_ev_F, last_im
     #for now, this is frozen because each patient underwent the same treatment series, later can be changed
     patient_drug_data = list(treatment_data.values())[0]
 
-    for iteration in range(0, len(imputed_biomarkers_matrix)):
-        #---Prediction Step
-        #print("treatment_params", treatment_params)
-        T_j_vals, T_j_jac = treatment_diet_mapping_ODE(treatment_params, patient_drug_data, iteration, current_steady_state_concs)
-        #print("ODE Values:", T_j_vals)
-        #print("ODE Jacobian:", T_j_jac)
-        treatment_ODE_outputs.append(T_j_vals)
-        current_steady_state_concs += T_j_vals #updating steady state concentrations
+    a_post_latent_states, smoothing_gains, latent_state_covs, latent_state_resids, \
+        innovations, \
+        innovation_covs, kalman_gains, a_post_state, a_post_cov, a_priori_covs, a_post_covs, treatment_ODE_outputs, total_nll = kf_forward_pass(imputed_biomarkers_matrix = imputed_biomarkers_matrix, last_ls_ev_F = last_ls_ev_F, last_imp_map_A = last_imp_map_A, last_G_map = last_G_map, M = M,
+    b = b, alpha = alpha, observations = severities, last_a_post_cov_est=last_process_cov, last_a_post_estimate=last_initial_latent_state,
+    last_process_noise_cov = last_process_noise_cov, last_measurement_noise_cov = last_measurement_noise_cov, treatment_params=treatment_params, current_steady_state_concs = current_steady_state_concs, patient_drug_data=patient_drug_data,
+    intercept = intercept, epsilon = 1e-9)
 
-        a_priori_state = last_ls_ev_F @ last_a_post_estimate + last_G_map @ T_j_vals #with treatment effect now included
-        a_priori_latent_states.append(a_priori_state)
-        a_priori_cov = last_ls_ev_F @ last_a_post_cov_est @ last_ls_ev_F.T + last_process_noise_cov
-        a_priori_covs.append(a_priori_cov)
-
-        if not np.all(np.isfinite(a_priori_state)):
-            print(f"Explosion at step {iteration}!")
-            print(f"F: {last_ls_ev_F}")
-            print(f"Prev State: {a_post_latent_states[-1]}")
-            break
-
-
-        #---Update Step
-        pred_imputed = last_imp_map_A @ a_priori_state + intercept #removed random noise realization, adding intercept term
-
-        innovation = imputed_biomarkers_matrix[iteration] - pred_imputed
-        innovation = np.clip(innovation, -10, 10) #clipped now to improve convergence
-        innovation_cov = last_imp_map_A @ a_priori_cov @ last_imp_map_A.T + last_measurement_noise_cov
-        innovation_cov += np.eye(innovation_cov.shape[0]) * epsilon #Tikhonov regularization to improve convergence
-
-        opt_Kal_gain = a_priori_cov @ last_imp_map_A.T @ np.linalg.pinv(innovation_cov) #corrected
-        kg_size = opt_Kal_gain.shape
-
-
-
-        a_post_state  = a_priori_state + opt_Kal_gain @ innovation
-        #changed to using Symmetrized Joseph Form to improve stability
-        IKH = np.identity(kg_size[0]) - opt_Kal_gain @ last_imp_map_A
-        a_post_cov = IKH @ a_priori_cov @ IKH.T + opt_Kal_gain @ last_measurement_noise_cov @ opt_Kal_gain.T
-        a_post_covs.append(a_post_cov)
-        a_post_residual = pred_imputed - last_imp_map_A @ a_post_state
-
-        #computing smoothing gain explicitly
-        if iteration < len(imputed_biomarkers_matrix) - 1:
-            smoothing_gain =  last_a_post_cov_est @ last_ls_ev_F.T @ robust_inv(a_priori_cov) #using robust inversion with Tikh reg term
-            smoothing_gains.append(smoothing_gain)
-
-        a_post_latent_states.append(a_post_state)
-        latent_state_covs.append(a_post_cov)
-        latent_state_resids.append(a_post_residual)
-        innovations.append(innovation)
-        innovation_covs.append(innovation_cov)
-        kalman_gains.append(opt_Kal_gain)
-
-        #updating
-        last_a_post_estimate = a_post_state
-        last_a_post_cov_est = a_post_cov
-
-        # print(f"--- Step {iteration} Debug ---")
-        # print(f"Predicted State Mean: {a_post_state}")
-        # if not np.all(np.isfinite(a_post_state)):
-        #     print("CRITICAL: ODE/Transition produced non-finite state!")
-        #
-        # print(f"Innovation (y - Ax): {innovation}")
-        # print(f"Kalman Gain K: {opt_Kal_gain}")
+    last_a_post_estimate = a_post_state
+    last_a_post_cov_est = a_post_cov
 
     #Recursive RTS smoothing initialization
     T = len(a_post_latent_states)
@@ -354,9 +370,12 @@ def all_layers_expectation_step(imputed_biomarkers_matrix, last_ls_ev_F, last_im
 
 
     results = {"smoothed_latent_states": smoothed_latents, "smoothed_latent_state_covs": smoothed_covs, "latent_state_resids": latent_state_resids, "kalman_gains": kalman_gains, "smoothing_gains": smoothing_gains,
-               "lagged_latent_state_covs": lagged_latent_state_covs, "innovations": innovations , "innovation_covs": innovation_covs, "treatment_ode_outputs": treatment_ODE_outputs}
+               "lagged_latent_state_covs": lagged_latent_state_covs, "innovations": innovations , "innovation_covs": innovation_covs, "treatment_ode_outputs": treatment_ODE_outputs,
+               "intercept": intercept, "current_steady_state_concs": current_steady_state_concs, "patient_drug_data": patient_drug_data,
+               "M": M, "b": b, "alpha": alpha}
 
     return results
+
 def full_maximization_step_HBM(latent_states, smoothed_covariances, lagged_covariances, imputed_biomarkers, first_layer_params, innovations, innovation_covs, initial_Q_prior, treatment_data, last_A, last_F, last_G, given_tikh_reg, EM_learning_rate = 0.1, prior_weight = .9):
     """Maximizes in closed form and with Gradient Descent."""
     #actual_treatment_data = list(treatment_data.values())[0] #frozen as the first entry since all patients underwent the same treatment regimen
@@ -424,7 +443,7 @@ def full_maximization_step_HBM(latent_states, smoothed_covariances, lagged_covar
     new_process_cov_Q_enforced += 1e-2 * np.eye(new_process_cov_Q.shape[0])
     final_enforced_Q = force_positive_definite(new_process_cov_Q_enforced)
     #adding diagonal constraints to Q and R to keep them from converging
-    new_Q = np.diag(np.diag(final_enforced_Q))
+    new_Q = np.diag(np.diag(final_enforced_Q)) + 1e-3 * np.eye(dim_y)
 
     new_measurement_cov_R_enforced = 0.5 * (new_measurement_cov_R + new_measurement_cov_R.T)
     new_measurement_cov_R_enforced += 1e-1 * np.eye(new_measurement_cov_R.shape[0]) #increasing floor of R
@@ -436,9 +455,39 @@ def full_maximization_step_HBM(latent_states, smoothed_covariances, lagged_covar
                         "current_W": new_W, "smoothed_latent_states": latent_states, "smoothed_latent_state_covs": smoothed_covariances}
 
     return maximized_params
-def layer_4_latent_state_severity_mapping(maximized_mean, treatment_series, diet_data, weights = np.array, biases = np.array):
-    latent_state = treatment_diet_mapping()
-    mean = np.exp(weights @ latent_state + biases)
+
+
+
+def layer_4_gamma_loss(treatment_params, Tjs, smoothed_latent_state, other_params, actual_S, current_A):
+
+    """Loss function used in Layer 4. Corresponds to the negative probability of obtaining
+     the actually observed acne severity on day t, given the current mean severity as a function of the latent state."""
+
+    Y_t = current_A @ smoothed_latent_state + other_params['intercept']
+    mean = jnp.exp(other_params['M'] @ Y_t + other_params['b'])
+    mean = jnp.maximum(mean, 1e-6) #ensuring mean is nonzero
+
+    alpha = other_params['alpha_fixed']
+    beta = alpha / mean
+
+    nll = -jnp.sum(alpha * jnp.log(beta) + (alpha - 1) * jnp.log(actual_S)
+                   - beta * actual_S - jax.scipy.special.gammaln(alpha))
+    return nll
+
+loss_grad_fn = value_and_grad(layer_4_gamma_loss, argnums=0)
+
+def layer_4_latent_state_severity_mapping(latent_states, diet_data, M, b, alpha_fixed, severities, current_A):
+
+    for i, latent_state in enumerate(latent_states):
+        mean_sev = jnp.exp(jnp.dot(M, latent_state) + b)
+        # dLoss_dBeta = gamma_loss(M, b, latent_state, alpha_fixed, severities[i])
+        # dBeta_dMean = -alpha_fixed/(mean_sev ** 2)
+        # dMean_dLatent = mean_sev * M
+        dBeta_dY = - (alpha_fixed * M)/mean_sev
+        dLoss_dTreat = jax.grad()
+
+
+
 
 
     #need to use the normal posterior mean from layer 2 as the likelihood for the gamma
@@ -513,9 +562,18 @@ def process_dataframes_for_model(dataframes, raw_frames, K_d_insulin = 4.0, K_d_
         control_rows_tensor.append(single_matrix)
 
 
+    norm_raw_sevs = [    normalize(rdf[["AcneSeverity"]].reset_index(drop=True), start_column_index=0, end_column_index=1, end_row_bl=28)      for rdf in raw_frames]
+    norm_raw_sevs = norm_raw_sevs
+
+    norm_severities_full_frame_sum = reduce(lambda x, y: x.add(y, fill_value=0), norm_raw_sevs)
+    norm_severities_av_matrix = norm_severities_full_frame_sum / len(norm_raw_sevs)  # different approach than data driven version
+
+
     severities_subframes_separate = [df[["AcneSeverity"]].reset_index(drop=True) for df in dataframes]
+
     severities_full_frame_sum = reduce(lambda x, y: x.add(y, fill_value=0), severities_subframes_separate)
     severities_av_matrix = severities_full_frame_sum/len(severities_subframes_separate) #different approach than data driven version
+
 
     #simple average of all observations
     observables_full_frame_sum = reduce(lambda x, y: x.add(y, fill_value=0), observables_subframes_separate)
@@ -549,7 +607,7 @@ def process_dataframes_for_model(dataframes, raw_frames, K_d_insulin = 4.0, K_d_
     imputeds_full_frame_sum = reduce(lambda x, y: x.add(y, fill_value=0), imputeds_subframes_separate)
     imputeds_biomarkers_matrix = imputeds_full_frame_sum / len(imputeds_subframes_separate)
 
-    return severities_av_matrix, final_raw_design_matrix, imputeds_biomarkers_matrix, control_rows_tensor, all_relevant_names
+    return severities_av_matrix, final_raw_design_matrix, imputeds_biomarkers_matrix, control_rows_tensor, all_relevant_names, norm_severities_av_matrix
 def control_diagnostics(control_tensor, dataframe_names):
     """Used to assess the distribution of baselines to check for steady state. Computes means, variances, and KL divergence betewen adjacent distributions."""
     control_statistics_matrices = []
@@ -622,11 +680,11 @@ def treatment_diet_mapping(params, T_raw, current_time, ss_concs):
     now_bioa_isotret = ss_concs[2] + (in_isotret - out_isotret) * dt_step
 
 
-    Jacobian = jnp.array( [now_bioa_clin, now_bioa_BPO, now_bioa_isotret])
+    treatment_vec = jnp.array( [now_bioa_clin, now_bioa_BPO, now_bioa_isotret])
     #PPGR_effective = PPGR_trained.predict(diet_data)
     #phi = [PPGR_effective, c_leu]
 
-    return Jacobian
+    return treatment_vec
 
 _calc_jac_k_internal = jax.jacfwd(treatment_diet_mapping, argnums=0) #used for XLA implementation in treatment_diet_mapping_ODE
 @jit
@@ -658,7 +716,7 @@ def apply_learning_rate(lr, M):
 def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biomarkers_matrix,
                   prior_mean_matrix, prior_precision_matrix, prior_scale_matrix, initial_2nd_layer_cov_mat, initial_2nd_layer_mean_mat,
                   initial_2nd_layer_coeff_mat, last_OU_matrices, initial_F, initial_A, initial_Q, initial_R, initial_G, all_diet_data, all_treatment_data, all_iAUCs, initial_treatment_params,
-                  dof = 0, max_epochs = 20, tikh_reg_term = 1e-2, learning_rate = 2e-1):
+                  initial_M, initial_b, initial_alpha, dof = 0, max_epochs = 20, tikh_reg_term = 1e-2, EM_learning_rate = 1e-6):
 
     #Initialization of all model constants already completed in model config
 
@@ -669,7 +727,9 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
     last_design_matrix = normalize_matrix_columnwise(initial_design_matrix.to_numpy())
     last_biomarkers_matrix = normalize_matrix_columnwise(initial_biomarkers_matrix.to_numpy())
     last_mean_matrix = prior_mean_matrix
-    last_severities_matrix = initial_severities_matrix #already normalized
+    last_severities_matrix = initial_severities_matrix["AcneSeverity"].to_numpy() #already normalized
+
+
 
     last_2nd_layer_covariance_matrix = initial_2nd_layer_cov_mat #initialized but not updated explicitly
     last_2nd_layer_mean_matrix = initial_2nd_layer_mean_mat #initialized but not updated explicitly
@@ -677,8 +737,6 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
 
     #updated explicitly
     last_F = initial_F
-
-
 
     #breaking symmetry in A at initialization, decreased initial values
     initial_A[2, 0] = 0.1  # Lipase -> Bacterial
@@ -692,6 +750,10 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
 
     last_Q = initial_Q
     last_R = initial_R
+
+    last_M = initial_M
+    last_b = initial_b
+    last_alpha = initial_alpha
 
     processed_last_OU_matrices = {"State_Matrix_OU": last_OU_matrices["State_Matrix_OU"] * np.identity(last_biomarkers_matrix.shape[1]),
                                   "Wiener_Matrix_OU": last_OU_matrices["Wiener_Matrix_OU"] * np.identity(last_biomarkers_matrix.shape[1])}
@@ -717,17 +779,78 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
     treatment_data_max = jnp.max(treatment_data_array)
     normalized_treatment_data_dict = {patient_ID: data / (treatment_data_max + 1e-6) for patient_ID, data in all_treatment_data.items()}
 
-
-
+    last_treatment_params = initial_treatment_params
 
     #----EM Loop
     for em_epoch in range(max_epochs):
         #----Kalman Filter
         one_iter_layer1_params = layer_2_bml_observable_biomarkers(design_matrix=last_design_matrix, imputed_biomarkers_matrix=last_biomarkers_matrix,
                                                                    current_mean_matrix=last_mean_matrix, prior_precision_matrix=prior_precision_matrix, prior_scale_matrix=prior_scale_matrix, dof = dof)
-        one_iter_layer3_params, iter_resids, ll = layer_3_imputed_biomarkers_multivar_model(first_layer_params=one_iter_layer1_params, this_last_observables_cov_fixed=this_initial_covariance, ou_matrices=processed_last_OU_matrices,
+        one_iter_layer3_params, iter_resids, ll, these_carried_forwards = layer_3_imputed_biomarkers_multivar_model(first_layer_params=one_iter_layer1_params, this_last_observables_cov_fixed=this_initial_covariance, ou_matrices=processed_last_OU_matrices,
                                                                            this_last_mean=last_2nd_layer_mean_matrix, this_last_coeff_matrix=last_2nd_layer_coeff_matrix, current_ls_ev_F=last_F, current_imp_map_A=last_A,
-                                                                           current_measurement_noise_cov=last_Q, current_process_noise_cov=last_R, current_G_map=last_G, last_initial_state=this_initial_latent_state, treatment_data = normalized_treatment_data_dict, treatment_params=initial_treatment_params, Q_prior = initial_Q, tikh_reg_term = tikh_reg_term)
+                                                                           current_measurement_noise_cov=last_Q, current_process_noise_cov=last_R, current_G_map=last_G, last_initial_state=this_initial_latent_state, treatment_data = normalized_treatment_data_dict, treatment_params=last_treatment_params, Q_prior = initial_Q, tikh_reg_term = tikh_reg_term,
+                                                                                                                    M = last_M, b = last_b, alpha = last_alpha, severities = last_severities_matrix)
+
+
+        def nll_objective(p_treat):
+
+             # We use the 'these_carried_forwards' dictionary you returned from the E-step
+             outputs = kf_forward_pass(
+                 treatment_params=p_treat,
+                 imputed_biomarkers_matrix=last_biomarkers_matrix,
+                 last_ls_ev_F=last_F,
+                 last_imp_map_A=last_A,
+                 last_G_map=last_G,
+                 M=these_carried_forwards["M"],
+                 b=these_carried_forwards["b"],
+                 alpha=these_carried_forwards["alpha"],
+                 observations= last_severities_matrix,
+                 last_process_noise_cov=last_Q,
+                 last_measurement_noise_cov=last_R,
+                 current_steady_state_concs=these_carried_forwards["current_steady_state_concs"],
+                 patient_drug_data=these_carried_forwards["patient_drug_data"],
+                 intercept=these_carried_forwards["intercept"],
+                 last_a_post_estimate=this_initial_latent_state,
+                 last_a_post_cov_est=this_initial_covariance
+             )
+
+             return outputs[-1] #scalar NLL
+
+        def test_mse_objective(p_treat):
+            # We use the 'these_carried_forwards' dictionary you returned from the E-step
+            outputs = kf_forward_pass(
+                treatment_params=p_treat,
+                imputed_biomarkers_matrix=last_biomarkers_matrix,
+                last_ls_ev_F=last_F,
+                last_imp_map_A=last_A,
+                last_G_map=last_G,
+                M=these_carried_forwards["M"],
+                b=these_carried_forwards["b"],
+                alpha=these_carried_forwards["alpha"],
+                observations=last_severities_matrix,
+                last_process_noise_cov=last_Q,
+                last_measurement_noise_cov=last_R,
+                current_steady_state_concs=these_carried_forwards["current_steady_state_concs"],
+                patient_drug_data=these_carried_forwards["patient_drug_data"],
+                intercept=these_carried_forwards["intercept"],
+                last_a_post_estimate=this_initial_latent_state,
+                last_a_post_cov_est=this_initial_covariance
+            )
+            return jnp.mean(jnp.square(outputs[0]))
+
+
+        #
+        # #
+        grads = jax.grad(nll_objective)(initial_treatment_params) #testing to see if Gamma loss is the issue
+        #
+        # #updating params (and upating the variable so the NEXT epoch uses the new ones)
+
+
+        last_treatment_params = jax.tree_util.tree_map(
+             lambda p, g: p - EM_learning_rate * g,
+             last_treatment_params,
+             grads)
+
 
         log_likelihoods.append(ll)
 
@@ -745,15 +868,20 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
         this_initial_covariance = one_iter_layer3_params["smoothed_latent_state_covs"][0]
 
 
+
+
+
     converged_params = {"1st_Layer_Coeffs": last_mean_matrix, "LS_Evolution_F": last_F, "Imputed_Mapping_A": last_A,
                         "Process_Cov": last_Q, "Measurement_Cov": last_R, "Treatment_Mapping_G": last_G}
+    final_treatment_params = last_treatment_params
     last_smoothed_latents = one_iter_layer3_params["smoothed_latent_states"]
     resids = iter_resids
 
+    print(converged_params, final_treatment_params)
 
     return converged_params, last_smoothed_latents, resids, log_likelihoods
 def process_data_and_build_HBM(these_dataframes, model_priors_and_config_handle, these_raw_frames, patients_diet_data, patients_treatment_data, patients_iAUCs):
-    this_ism, this_ids, this_ibm, this_control_tensor, dataframe_column_names_ordered = process_dataframes_for_model(these_dataframes, these_raw_frames)
+    this_ism, this_ids, this_ibm, this_control_tensor, dataframe_column_names_ordered, severities_normed = process_dataframes_for_model(these_dataframes, these_raw_frames)
     this_control_statistics_matrices = control_diagnostics(this_control_tensor, dataframe_column_names_ordered)
 
     with open(model_priors_and_config_handle, "r") as config:
@@ -795,14 +923,18 @@ def process_data_and_build_HBM(these_dataframes, model_priors_and_config_handle,
   "alpha": model_priors_and_config["alpha"],
   "beta": model_priors_and_config["beta"],
     "k_elim_isotret": model_priors_and_config["k_elim_isotret"]}
+    initial_M = jnp.full((1, 3), np.array(model_priors_and_config["initial_M"]))
+    initial_b = jnp.array([1.5])
+    initial_alpha = jnp.array(np.array(model_priors_and_config["initial_alpha"]))
 
 
-    this_fit_model_params, these_latents, these_resids, these_lls = fit_HBM_model(initial_severities_matrix = this_ism, initial_design_matrix=this_ids, initial_biomarkers_matrix=this_ibm,
+    this_fit_model_params, these_latents, these_resids, these_lls = fit_HBM_model(initial_severities_matrix = severities_normed, initial_design_matrix=this_ids, initial_biomarkers_matrix=this_ibm,
                                    prior_mean_matrix=this_pmm, prior_precision_matrix=this_ppm, prior_scale_matrix=this_pcm,
                                    dof = prior_dof, initial_2nd_layer_cov_mat=this_2nd_cov, initial_2nd_layer_mean_mat= this_2nd_mean,
                                    initial_2nd_layer_coeff_mat=this_2nd_coeff_matrix, last_OU_matrices=last_OU_matrices,
                                    initial_F=initial_ls_ev_f, initial_G = initial_G_map, initial_A=initial_imp_map_A, initial_Q=initial_q_process_noise, initial_R=initial_r_measurement_noise,
-                                   all_diet_data=patients_diet_data, all_treatment_data=patients_treatment_data, all_iAUCs=patients_iAUCs, initial_treatment_params=these_initial_treatment_params)
+                                   all_diet_data=patients_diet_data, all_treatment_data=patients_treatment_data, all_iAUCs=patients_iAUCs, initial_treatment_params=these_initial_treatment_params,
+                                                                                  initial_M = initial_M, initial_b = initial_b, initial_alpha=initial_alpha)
 
 
 
