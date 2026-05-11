@@ -1,88 +1,123 @@
-# acneBayesModel
-**A probabilistic modeling framework for evaluating longitudinal treatment effects and intervention efficacy.**
-
-This project demonstrates how a probabilistic modeling framework can be used to evaluate clinical intervention strategies in noisy, longitudinal biological data. 
-
-In this system, outcome severity is modeled as a discrete state, enabling inference about how repeated treatments and treatment switches affect future responses. 
-
-The framework produces treatment-history-aware probabilistic predictions by using kernel-density-based discretization in conjunction with Bayesian updating of Dirichlet posteriors. 
-
-The framework tracks the evolution of sequential posteriors using cumulative Kullback-Leibler divergence, and fits piecewise linear models to identify treatment regimes with non-diminishing returns. 
-
-This allows evaluation of the efficacy of different treatment strategies through an information-theoretic lens, instead of relying on point estimates alone. 
+# acneBayesModel (version 2.0.0)
+**A patient-specific Python simulation-based optimizer for acne vulgaris treatment regimens.**
 
 
-![Cumulative KL divergence over sequential treatments](AcneProjectPic.png)
-*Cumulative KL divergence over sequential treatments. Piecewise spline fit highlights regions of diminishing returns, demonstrating how treatment history informs probabilistic prediction of future outcomes.*
+## General Information
+
+#### Description:  
+AcneBayesModel is a tool for collaborative personalized dermatology. Clinicians may use the software to create dosage schedules from a variety of different treatment options, such as benzaclin, isotretinoin, and others to later be added. 
+
+The software can simulate acne severity improvement under each regimen, allowing clinicians to weigh efficacy against off-target side effects. It does so by maintaining a record of the patient’s latent pathological state. 
+
+Latent Pathological State ($Z{sub}t{/sub}$) is defined thusly, from the following measurable clinical biomarkers:
+
+| Latent State Component  | Description                                                 | Correlated Variables       |
+|-------------------------|-------------------------------------------------------------|----------------------------|
+| Total Bacterial Dysbiosis| Shift in distribution of facial bacterial microbiome.       | Skin pH                    |
+| Total Inflammation      | Inflammatory activity accrued from treatment and pathology. | NLR, [IGF1], [Insulin]                           |
+| Total Abnormal Sebum    | Excess sebum produced as a result of pathology.             | [IGF1], [Insulin], skin pH |
+
+Clinicians may make population level treatment recommendations by running simulations with respect to the latest population level model parameters. 
+
+Otherwise, clinicians may train the model with an individual patient's data and hypothesized initial latent state to make individualized treatment regimens for patients. 
+They may also display to patients how dietary changes may accelerate time to recovery (in progress).
 
 
+#### Organization
 
-## Approach
+User Interface build is currently in progress. 
 
-### Data Processing and Exploratory Analysis
+The pipeline/embedding from patient dataframe to acne severity distribution (Gamma distribution indexed by model parameters) is displayed below.  
+```mermaid
+%%{init: {'theme': 'base', 'flowchart': {'htmlLabels': true}}}%%
 
-1. **Severity Score Normalization, KDE Binning, & Bootstrapping:**
-   - Normalized longitudinal severity measurements and discretized them into 3 interpretable states using probability-density based binning.
-   - Verified binning robustness with bootstrapping. 
+graph TD;
+    
+    A{"Raw Patient Data"}-->B{"pH"}; A-->C{"Insulin"}; A-->D{"IGF1"}; A-->E["NLR"]
+    B---->|Embedding|F["Lipase Effect"]; C---->|Embedding|G["mTORC1"]; D---->|Embedding|G; E---->|Embedding|EPrime["Partial Inflammation"]
+    ETitle["`**Observable Biomarkers**`"]; ETitle ~~~ A;  EPrimeTitle["`**Imputed Biomarkers**`"]; EPrimeTitle ~~~ D
+        subgraph " "
+        direction LR
+        B; C; D; E; ETitle
+        
+        end
+    
+        subgraph " "
+        direction LR
+        ParamsObservable[W: Observable to Imputed Biomarker Mapping] 
+        
+        
+        style ParamsObservable fill:none, stroke:none;
+       
+        
+        F; G; EPrime; ParamsObservable
+        end
+    
+    F-->|Major Driver|I["Bacterial Dysbiosis State"]; G-->|Major Driver|J["Inflammatory State"]; EPrime-->|Major Driver|J; G --> K["Sebum State"]
+    
+    LatentTitle["`**Latent State**`"]; LatentTitle ~~~ F
+        subgraph " "
+        direction LR
+        
+        ParamsLatent[G: Treatment Dosage to Latent Effect \n A: Imputed Biomarker to Latent State \n F: Latent State Evolution Function \n Q and R: Process and Measurement Covariance]
+        style ParamsLatent fill:none, stroke:none;
+        
+        ParamsImputed[k<sub>Clin bioa</sub> <br> k<sub>hl</sub> <br> k<sub>elim Clin</sub> <br> k<sub>BPO bioa</sub> <br> vMax<sub>hlt</sub> <br> kMax<sub>BPO</sub> <br> k<sub>elim BPO] 
+        restParamsImputed[a, b <br> k12<sub>itret</sub>]
+        
+        style ParamsImputed fill:none, stroke:none;
+        style restParamsImputed fill:none, stroke:none;
+        
+        I; J; K; LatentTitle; ParamsLatent; ParamsImputed; restParamsImputed
+        end
+        
+    LossTitle["`**Gamma Loss**`"]; LossTitle ~~~ L      
+        subgraph " "
+        direction LR
+        
+        ParamsGamma[M: Latent State to Gamma Mean Function \n b: Latent State to Gamma Mean bias]
+        style ParamsGamma fill:none, stroke:none;
+        
+        L["Gamma Mean"]; LossTitle; ParamsGamma
+        end
+    I--->L; J--->L; K--->L
+```
 
-    *This step ensured that subsequent probabilistic modeling is based on identifiable state representations.* 
 
-2. **Dirichlet Posterior Modeling:**
-   - Computed the posterior distribution over severity states, conditioned on treatment history. 
-   - Quantified the information gained from each treatment update via cumulative KL divergence across all treatment updates.
-   
-   *This step enabled history-aware, probabilistic prediction of future outcomes and comparison of treatment strategies over time.* 
+## Installation
+User Interface build is currently in progress. The existing virtual environment uses Python 3.12.9, JAX 
 
-3. **Cumulative KL Divergence Curve Fitting, Piecewise Linear Regression:**
-   - Modeled evolution of cumulative KL divergence to detect sustained or diminishing treatment effects via piecewise linear regression.
-  
-   *This step highlighted which treatment regimes resulted in consistent improvement, revealing insights into intervention efficacy and mechanistic drivers of diminishing returns.* 
-
-4. **Fitting of State-Space/Statistical Mechanistic Model, Optimization of Parameters with Expectation-Maximization/Generalized EM Algorithm**
-   - Developed a latent-state mechanistic model of outcome severity, incorporating bacterial load, inflammation, and sebum production.
-   - Optimized parameters with an Expectation-Maximization / Generalized EM (EM/GEM) approach.
-   - Also optimized Transition Kernels (First Order Markov Chain Approximation) between severity change states for use in simulation. 
-   
-   *This model enabled direct testing of potential treatment regimes for outcome efficacy and cost-optimization.
-   Model equations and EM/GEM implementation can be found in the corresponding Jupyter Notebook.*
-
-   *Latent dynamics parameters are fixed at a representative maximum likelihood estimate due to structural non-identifiability given available data. 
-   Future versions of the model will introduce biologically informed priors.*
-
-### Clinical Outcome Simulation Mode
-  - Used clustering (K-Means) to define mapping from latent states to Dirichlet posteriors. 
-  - Implemented Beam Search algorithm to select the top n Severity Change State trajectories in order of log likelihood.
-  - Defined Streamlit UI allowing users to input treatment trajectory, initial latent state, and initial Acne Severity, displaying the top n top n Severity Change State trajectories and expected trajectory. 
-
+## Usage
+User Interface build is currently in progress.
 
 ## Applications
 
-1. **Clinical Decision Support:**
+1. **Population-Level & Individualized Treatment Recommendation:**
   - Identifies when further treatment is likely to have minimal benefit.
-  - Aids in clinician decision-making, highlighting when alternative interventions (like hormonal therapies) may be justified. 
-  - Supports cost-effectiveness assessments for clinicians, patients, and insurers.
-
-2. **Scalable Data Insights & Automation:**
-   - Enables dataset annotation and patient report generation.
-   - Can be used to summarize trends across patient cohorts to guide treatment strategy.
-   - Integrates with LLM tools for scalable data analysis and reporting. 
+  - Clinicians may make population level treatment recommendations by running simulations with respect to the latest population level model parameters. 
+  - Clinicians may train the model with an individual patient's data/hypothesized initial latent state to make individualized recommendations. 
+2. **Increasing Motivation to Adhere to Healthy Eating Habits:** 
+  - Doctors may run simulations predicting how dietary changes may accelerate time to recovery (in progress).
+3. **Scalable Cohort Insight Generation:**
+   - Enables dataset analysis and patient report generation.
+   - Can be used to summarize time to recovery trends across patient cohorts to guide treatment strategies. 
 
 ## Next Steps
 
-1. **Omics Integration:**
-  - Incorporate biochemical signatures of inflammation into the state-space model to refine predictions.  
+1. **Refine Embedding from Raw Data to Observable Biomarker space:**
+  -  Refining methods for determining bacterial dysbioses in particular from observable biomarker data.  
 
-2. **Demographic Analysis:**
-  - Examine treatment responses across age, background, and geographic cohorts.
+2. **Refine Patient-Specific Effect Dependence:**
+  - Reintegrating patient-specific PPGR (post-prandial glycemic response) into model structure, instead of as simple prediction bias.
 
 3. **LLM Integration:**
-  - Integrate LLM tools to automate annotations, planning, and report generation for patients and clinicians.
+  - Integrate LLM tools to automate report generation for patients and clinicians.
 
 
 
 **Author:** Nathaniel Wolff
 **Contact:** [nathanielwolff1818@gmail.com; https://github.com/Nathaniel-Wolff]  
-**Status:** 7th draft complete, Model Advancement in progress. 
-**Date Updated:** 03-05-2026  
+**Status:** 8th draft complete, Second UI Build in progress. 
+**Date Updated:** 04-28-2026  
 
 
