@@ -200,9 +200,7 @@ def layer_3_imputed_biomarkers_multivar_model(first_layer_params, this_last_obse
     this_maximization = full_maximization_step_HBM(latent_states = unpacked_latent_states, first_layer_params=first_layer_params,
                                                    smoothed_covariances = latent_state_covs, lagged_covariances = latent_state_lagged_covs, imputed_biomarkers=usable_imputeds_matrix, innovations=these_innovations, innovation_covs=these_innovation_covs, initial_Q_prior=Q_prior,
                                                    given_tikh_reg=tikh_reg_term, treatment_data=unpacked_treatment_ODE_results, last_A=current_imp_map_A, last_F=current_ls_ev_F, last_G=current_G_map)
-    #maximized_params = {"current_ls_ev_F": new_ls_ev_F, "current_impt_map_H": new_imp_map_H,
-                        #"current_Q": new_process_cov_Q, "current_R": new_measurement_cov_R}
-
+   
     #---Computation of Ornstein Uhlenbeck RV, indexed by its continous Lyanpunov equation solution matrix
     #this_OU_State_Matrix_const = ou_matrices["State_Matrix_OU"]
     #this_OU_State_Matrix = this_OU_State_Matrix_const * np.identity(cov_matrix_maximized.shape[0]) #check dimensions for Wiener process and State Matrix
@@ -398,9 +396,6 @@ def full_maximization_step_HBM(latent_states, smoothed_covariances, lagged_covar
     new_ls_ev_F = dampen_transition_F(combined_matrix[:, :dim_z])
     new_G = combined_matrix[:, dim_z:]
     G_damped = (1 - EM_learning_rate) * last_G + EM_learning_rate * new_G
-
-    #new_ls_ev_F = sufficient_stats["one_lag_correlations"] @ np.linalg.pinv(
-        #sufficient_stats["prev_state_correlations"] + tikh_reg_term)
 
     outer_products = [np.outer(imp, lat) for lat, imp in zip(latent_states, imputed_biomarkers)]
 
@@ -739,11 +734,15 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
     last_F = initial_F
 
     #breaking symmetry in A at initialization, decreased initial values
-    initial_A[2, 0] = 0.1  # Lipase -> Bacterial
-    initial_A[1, 1] = 0.1  # Inflamm -> Inflamm
-    initial_A[0, 2] = 0.1  # mTORC1 -> Sebum
-    #slight random coupling noise  is added to the other drivers of A
+    initial_A[2, 0] = 0.6  # Lipase -> Bacterial
+    initial_A[1, 1] = 1.0  # Inflamm -> Inflamm
+    initial_A[0, 2] = 0.5  # mTORC1 -> Sebum
+
+
+    #slight random coupling noise  is added to the other drivers of A (attempt to remove)
     initial_A += np.random.normal(0, 0.05, (3, 3))
+
+
     #immediate masking, only boosting diagonals at initialization
     last_A = mask_A_mechanistically_initial(initial_A)
     last_G = initial_G
