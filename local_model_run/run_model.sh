@@ -4,7 +4,7 @@
 #hardcoding environment source, script sources for now
 
 venv_dir="/Users/nathaniel/acneBayesModel/venv"
-script_location="/Users/nathaniel/acneBayesModel/src/acne_model/model_script.py"
+script_location="/Users/nathaniel/acneBayesModel/src/acne_model/other_model_script.py"
 
 if [ -d "$venv_dir" ]; then 
 	echo "Environment exists. Activation about to start..."
