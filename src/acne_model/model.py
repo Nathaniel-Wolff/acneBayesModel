@@ -16,6 +16,7 @@ import jax
 import jax.numpy as jnp
 from jax import jit, jacfwd, grad, value_and_grad
 from jax.lax import scan
+from jax.tree_util import tree_flatten, tree_unflatten
 from matplotlib import pyplot as plt
 
 def layer_2_bml_observable_biomarkers(design_matrix, imputed_biomarkers_matrix, current_mean_matrix, prior_precision_matrix, prior_scale_matrix, dof):
@@ -450,9 +451,6 @@ def full_maximization_step_HBM(latent_states, smoothed_covariances, lagged_covar
                         "current_W": new_W, "smoothed_latent_states": latent_states, "smoothed_latent_state_covs": smoothed_covariances}
 
     return maximized_params
-
-
-
 def layer_4_gamma_loss(treatment_params, Tjs, smoothed_latent_state, other_params, actual_S, current_A):
 
     """Loss function used in Layer 4. Corresponds to the negative probability of obtaining
@@ -816,7 +814,6 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
              return outputs[-1] #scalar NLL
 
         def test_mse_objective(p_treat):
-            # We use the 'these_carried_forwards' dictionary you returned from the E-step
             outputs = kf_forward_pass(
                 treatment_params=p_treat,
                 imputed_biomarkers_matrix=last_biomarkers_matrix,
@@ -876,9 +873,8 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
     last_smoothed_latents = one_iter_layer3_params["smoothed_latent_states"]
     resids = iter_resids
 
-    print(converged_params, final_treatment_params)
 
-    return converged_params, last_smoothed_latents, resids, log_likelihoods
+    return converged_params, final_treatment_params, last_smoothed_latents, resids, log_likelihoods
 def process_data_and_build_HBM(these_dataframes, model_priors_and_config_handle, these_raw_frames, patients_diet_data, patients_treatment_data, patients_iAUCs):
     this_ism, this_ids, this_ibm, this_control_tensor, dataframe_column_names_ordered, severities_normed = process_dataframes_for_model(these_dataframes, these_raw_frames)
     this_control_statistics_matrices = control_diagnostics(this_control_tensor, dataframe_column_names_ordered)
@@ -927,7 +923,7 @@ def process_data_and_build_HBM(these_dataframes, model_priors_and_config_handle,
     initial_alpha = jnp.array(np.array(model_priors_and_config["initial_alpha"]))
 
 
-    this_fit_model_params, these_latents, these_resids, these_lls = fit_HBM_model(initial_severities_matrix = severities_normed, initial_design_matrix=this_ids, initial_biomarkers_matrix=this_ibm,
+    this_fit_model_params, these_fit_treatment_params, these_latents, these_resids, these_lls = fit_HBM_model(initial_severities_matrix = severities_normed, initial_design_matrix=this_ids, initial_biomarkers_matrix=this_ibm,
                                    prior_mean_matrix=this_pmm, prior_precision_matrix=this_ppm, prior_scale_matrix=this_pcm,
                                    dof = prior_dof, initial_2nd_layer_cov_mat=this_2nd_cov, initial_2nd_layer_mean_mat= this_2nd_mean,
                                    initial_2nd_layer_coeff_mat=this_2nd_coeff_matrix, last_OU_matrices=last_OU_matrices,
@@ -935,11 +931,19 @@ def process_data_and_build_HBM(these_dataframes, model_priors_and_config_handle,
                                    all_diet_data=patients_diet_data, all_treatment_data=patients_treatment_data, all_iAUCs=patients_iAUCs, initial_treatment_params=these_initial_treatment_params,
                                                                                   initial_M = initial_M, initial_b = initial_b, initial_alpha=initial_alpha)
 
+    #flattening treatment param PyTree and reconverting back to json serializable format
+    vals, tree_def = tree_flatten(these_fit_treatment_params)
+    reconstructed_treatment_params = tree_unflatten(tree_def, vals)
+    corrected_fit_treatment_params = jax.tree_util.tree_map(
+        lambda x: x.tolist() if hasattr(x, 'tolist') else x,
+        reconstructed_treatment_params
+    )
 
-
-
-    these_result_diagnostics = result_diagnostics(these_resids, these_latents, these_lls)
-    return this_fit_model_params
+    #making nested arrays json serializable
+    corrected_fit_model_params = {key: val.tolist() for key, val in this_fit_model_params.items()}
+    #turned off for now
+    #these_result_diagnostics = result_diagnostics(these_resids, these_latents, these_lls)
+    return corrected_fit_model_params, corrected_fit_treatment_params
 
 
 def calculate_log_likelihood(innovations, innovation_covs):

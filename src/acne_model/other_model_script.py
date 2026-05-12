@@ -1,13 +1,16 @@
 from acne_model import data_parsing
 from acne_model import process_data_and_build_HBM
+import sys
 import json
-import os
 
-base_path = "/DockerAcneBayesModel/data"
 
-this_raw_data_name = os.path.join(base_path, "sim_acne_amended_v2.csv")
-this_diet_raw_data_name = os.path.join(base_path, "sim_acne_diet.csv")
-json_name = os.path.join(base_path, "bhm_model_config.json")
+all_names = sys.stdin.read()
+all_names_split = all_names.split(",")
+all_names_split_real = [name.strip() for name in all_names_split]
+
+this_raw_data_name = all_names_split_real[0]
+this_diet_raw_data_name = all_names_split_real[1]
+json_name = all_names_split_real[2]
 
 data_returns = data_parsing(this_raw_data_name, this_diet_raw_data_name)
 these_frames = data_returns[0]
