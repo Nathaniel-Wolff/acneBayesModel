@@ -1,0 +1,3 @@
+*.json
+local_model_run/
+*.DS_Store
