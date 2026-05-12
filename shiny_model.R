@@ -3,6 +3,8 @@ library(mvtnorm, stats)
 
 #feed forward algorithm with trained parameters
 
+
+                                                                                                                                                                                                                                                                                                                                                           [0.00607883, 0.00607883, 0.10941893]], dtype=float32)
 calc_single_Z <- function(last_Z, cur_F, T_j, G, Q, num_samples ){
   set.seed(271)
   w_t <- rep(mu, each=num_samples)  + rvmt(n = num_samples, mean = 0, sigma = Q, df = Inf)
