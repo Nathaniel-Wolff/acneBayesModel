@@ -6,7 +6,7 @@ __pycache__/
 *.so
 *.dylib
 
-# Virtual environments
+#Vens
 .venv/
 venv/
 env/
@@ -21,7 +21,10 @@ dist/
 *.nbconvert.ipynb
 
 # ---- Data outputs ----
-# Fill in later after simulation mode push
+*.json
+*.png
+*.csv
+
 
 # ---- Model checkpoints, logs ----
 checkpoints/
@@ -36,11 +39,13 @@ logs/
 *.swo
 
 # ---- OS files ----
-.DS_Store
-Thumbs.db
+*.DS_Store
+*.Rhistory
+*Thumbs.db
 
 # ---- Project-specific ----
-# Might be filled in with simulation mode push
+local_model_run/
+pyproject.toml
 
 # Temporary scratch
 # also just in case
