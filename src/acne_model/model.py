@@ -279,13 +279,29 @@ def kf_forward_pass(treatment_params, imputed_biomarkers_matrix, last_ls_ev_F, l
 
         a_post_state  = a_priori_state + opt_Kal_gain @ innovation
 
-        mean = jnp.exp(M @ (last_imp_map_A @ a_post_state) + b)
-        mean_safe = jnp.maximum(mean, 1e-5) #ensuring mean is nonzero
+        linking_func_out = M @ (last_imp_map_A @ a_post_state) + b
+        lf_out_clipped = jnp.clip(linking_func_out, -10.0, 5.0) # clipping the full mean to prevent gradient explosions
+
+        mean = jnp.exp(lf_out_clipped)
+
+
+        mean_safe = jnp.maximum(mean, 1e-5) #ensuring mean is nonzero as well
+
+
         alpha_safe = jnp.maximum(alpha, 1.1) #ensuring alpha is nonzero
 
+        #corrected scale to use alpha_safe, ensuring severity is nonzero
+        observation_floored = jnp.maximum(observations[iteration], 1e-3)
 
-        total_nll += -jnp.sum(jax.scipy.stats.gamma.logpdf(observations[iteration], alpha_safe, scale= mean_safe / alpha))
+        #adding floor to scale to improve
+        floored_scale = (mean_safe/alpha_safe) + 1e-2
 
+        #print(jax.scipy.stats.gamma.logpdf(observation_floored, alpha_safe, scale = floored_scale))
+
+        total_nll += -jnp.sum(jax.scipy.stats.gamma.logpdf(observation_floored, alpha_safe, scale= mean_safe / alpha_safe))
+
+        #brief test of changing the objective to see if there's improvment
+        #total_nll += -jnp.sum(jax.scipy.stats.norm.logpdf(observations[iteration], loc=mean_safe, scale=0.1))
 
         #changed to using Symmetrized Joseph Form to improve stability
         IKH = np.identity(kg_size[0]) - opt_Kal_gain @ last_imp_map_A
@@ -446,12 +462,14 @@ def full_maximization_step_HBM(latent_states, smoothed_covariances, lagged_covar
     final_enforced_R = force_positive_definite(new_measurement_cov_R_enforced)
     new_R = np.diag(np.diag(final_enforced_R))
 
+    #updating layer 4 params
+
     maximized_params = {"current_ls_ev_F": damped_ls_ev_F_enforced, "current_imp_map_A": damped_imp_map_A,
                         "current_Q": new_Q, "current_R": new_R, "current_G": G_damped,
                         "current_W": new_W, "smoothed_latent_states": latent_states, "smoothed_latent_state_covs": smoothed_covariances}
 
     return maximized_params
-def layer_4_gamma_loss(treatment_params, Tjs, smoothed_latent_state, other_params, actual_S, current_A):
+def layer_4_gamma_loss(smoothed_latent_state, other_params, actual_S, current_A):
 
     """Loss function used in Layer 4. Corresponds to the negative probability of obtaining
      the actually observed acne severity on day t, given the current mean severity as a function of the latent state."""
@@ -652,6 +670,8 @@ def treatment_diet_mapping(params, T_raw, current_time, ss_concs):
     """Function mapping raw treatment dosages and diet covariates to latent state, V(T_j, Phi_{i, j})."""
     #T_raw is previously zipped with treatment names in order.
     #need to account for molar ratios here since using gram weights with percentages. Do this later.
+
+
     k_clin_bioa, k_hydrolysis, k_elim_clin  = params["k_clin_bioa"], params["k_hydrolysis"], params["k_elim_clin"]
     k_bpo_bioa, vmax_hlyt, K_max, k_elim_BPO =  params["k_bpo_bioa"], params["vmax_hlyt"], params["K_max"], params["k_elim_BPO"]
     k_12, alpha, beta, k_elim_isotret = params["k_12"], params["alpha"], params["beta"], params["k_elim_isotret"]
@@ -709,7 +729,7 @@ def apply_learning_rate(lr, M):
 def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biomarkers_matrix,
                   prior_mean_matrix, prior_precision_matrix, prior_scale_matrix, initial_2nd_layer_cov_mat, initial_2nd_layer_mean_mat,
                   initial_2nd_layer_coeff_mat, last_OU_matrices, initial_F, initial_A, initial_Q, initial_R, initial_G, all_diet_data, all_treatment_data, all_iAUCs, initial_treatment_params,
-                  initial_M, initial_b, initial_alpha, dof = 0, max_epochs = 20, tikh_reg_term = 1e-2, EM_learning_rate = 1e-6):
+                  initial_M, initial_b, initial_alpha, dof = 0, max_epochs = 20, tikh_reg_term = 1e-2, EM_learning_rate = 1e-6, nonlinear_learning_rate = 1e-9):
 
     #Initialization of all model constants already completed in model config
 
@@ -787,20 +807,25 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
                                                                            this_last_mean=last_2nd_layer_mean_matrix, this_last_coeff_matrix=last_2nd_layer_coeff_matrix, current_ls_ev_F=last_F, current_imp_map_A=last_A,
                                                                            current_measurement_noise_cov=last_Q, current_process_noise_cov=last_R, current_G_map=last_G, last_initial_state=this_initial_latent_state, treatment_data = normalized_treatment_data_dict, treatment_params=last_treatment_params, Q_prior = initial_Q, tikh_reg_term = tikh_reg_term,
                                                                                                                     M = last_M, b = last_b, alpha = last_alpha, severities = last_severities_matrix)
-
-
+        # now optimizes treatment params and linking function params
+        all_params_to_optimize = {
+            "treatment_params": last_treatment_params,
+            "M": last_M,
+            "b": last_b,
+            "alpha": last_alpha
+        }
         def nll_objective(p_treat):
 
-             # We use the 'these_carried_forwards' dictionary you returned from the E-step
+             #'these_carried_forwards' dictionary is returned from E-step (correct; already includes linking function params)
              outputs = kf_forward_pass(
-                 treatment_params=p_treat,
+                 treatment_params=p_treat["treatment_params"],
                  imputed_biomarkers_matrix=last_biomarkers_matrix,
                  last_ls_ev_F=last_F,
                  last_imp_map_A=last_A,
                  last_G_map=last_G,
-                 M=these_carried_forwards["M"],
-                 b=these_carried_forwards["b"],
-                 alpha=these_carried_forwards["alpha"],
+                 M=p_treat["M"],
+                 b=p_treat["b"],
+                 alpha=p_treat["alpha"],
                  observations= last_severities_matrix,
                  last_process_noise_cov=last_Q,
                  last_measurement_noise_cov=last_R,
@@ -820,9 +845,9 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
                 last_ls_ev_F=last_F,
                 last_imp_map_A=last_A,
                 last_G_map=last_G,
-                M=these_carried_forwards["M"],
-                b=these_carried_forwards["b"],
-                alpha=these_carried_forwards["alpha"],
+                M=p_treat["M"],
+                b=p_treat["b"],
+                alpha=p_treat["alpha"],
                 observations=last_severities_matrix,
                 last_process_noise_cov=last_Q,
                 last_measurement_noise_cov=last_R,
@@ -835,19 +860,12 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
             return jnp.mean(jnp.square(outputs[0]))
 
 
-        #
-        # #
-        grads = jax.grad(nll_objective)(initial_treatment_params) #testing to see if Gamma loss is the issue
-        #
-        # #updating params (and upating the variable so the NEXT epoch uses the new ones)
 
-
+        grads = jax.grad(nll_objective)(all_params_to_optimize) #testing to see if Gamma loss is the issue
         last_treatment_params = jax.tree_util.tree_map(
              lambda p, g: p - EM_learning_rate * g,
              last_treatment_params,
-             grads)
-
-
+             grads["treatment_params"])
         log_likelihoods.append(ll)
 
         #including learning rate to improve convergence in new params
@@ -863,13 +881,28 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
         this_initial_latent_state = one_iter_layer3_params["smoothed_latent_states"][0]
         this_initial_covariance = one_iter_layer3_params["smoothed_latent_state_covs"][0]
 
+        #correction - updating linking function params with its own learning rate
+        last_M = last_M - nonlinear_learning_rate * grads["M"]
+        last_b = last_b - nonlinear_learning_rate * grads["b"]
+
+        #ensuring alpha is greater than 0
+        last_alpha = last_alpha - nonlinear_learning_rate * grads["alpha"]
+        last_alpha = jnp.maximum(last_alpha, 1.1)
+
+
+
+        #print(last_alpha, "M", jnp.mean(jnp.abs(last_M)), "b", last_b)
+        #print(grads["alpha"], grads["M"], grads["b"])
+
 
 
 
 
     converged_params = {"1st_Layer_Coeffs": last_mean_matrix, "LS_Evolution_F": last_F, "Imputed_Mapping_A": last_A,
-                        "Process_Cov": last_Q, "Measurement_Cov": last_R, "Treatment_Mapping_G": last_G}
+                        "Process_Cov": last_Q, "Measurement_Cov": last_R, "Treatment_Mapping_G": last_G,
+                        "M_linking_func": last_M, "b_linking_func": last_b,"alpha_linking_func": last_alpha}
     final_treatment_params = last_treatment_params
+
     last_smoothed_latents = one_iter_layer3_params["smoothed_latent_states"]
     resids = iter_resids
 
@@ -877,6 +910,7 @@ def fit_HBM_model(initial_severities_matrix, initial_design_matrix, initial_biom
     return converged_params, final_treatment_params, last_smoothed_latents, resids, log_likelihoods
 def process_data_and_build_HBM(these_dataframes, model_priors_and_config_handle, these_raw_frames, patients_diet_data, patients_treatment_data, patients_iAUCs):
     this_ism, this_ids, this_ibm, this_control_tensor, dataframe_column_names_ordered, severities_normed = process_dataframes_for_model(these_dataframes, these_raw_frames)
+
     this_control_statistics_matrices = control_diagnostics(this_control_tensor, dataframe_column_names_ordered)
 
     with open(model_priors_and_config_handle, "r") as config:
@@ -918,8 +952,8 @@ def process_data_and_build_HBM(these_dataframes, model_priors_and_config_handle,
   "alpha": model_priors_and_config["alpha"],
   "beta": model_priors_and_config["beta"],
     "k_elim_isotret": model_priors_and_config["k_elim_isotret"]}
-    initial_M = jnp.full((1, 3), np.array(model_priors_and_config["initial_M"]))
-    initial_b = jnp.array([1.5])
+    initial_M = jnp.full((1, 3), np.array(model_priors_and_config["initial_M"])) #should be on the order of 10e-1
+    initial_b = jnp.array(model_priors_and_config["initial_b"]) #see if it is correct
     initial_alpha = jnp.array(np.array(model_priors_and_config["initial_alpha"]))
 
 
@@ -941,8 +975,8 @@ def process_data_and_build_HBM(these_dataframes, model_priors_and_config_handle,
 
     #making nested arrays json serializable
     corrected_fit_model_params = {key: val.tolist() for key, val in this_fit_model_params.items()}
-    #turned off for now
-    #these_result_diagnostics = result_diagnostics(these_resids, these_latents, these_lls)
+
+    these_result_diagnostics = result_diagnostics(these_resids, these_latents, these_lls)
     return corrected_fit_model_params, corrected_fit_treatment_params
 
 

@@ -13,7 +13,6 @@ COPY src/ ./src/
 
 RUN pip install --no-cache-dir .
 
-
 #copying model config for now, later will be allowed to be changed by user
 RUN mkdir -p ./data
 COPY bhm_model_config.json ./data/
@@ -22,5 +21,9 @@ COPY local_model_run/sim_acne_diet.csv ./data/
 
 #ENV PYTHONPATH="/DockerAcneBayesModel/src:${PYTHONPATH}"
 
-ENTRYPOINT ["python", "-m", "acne_model.model_script"]
+EXPOSE 8000
+
+#updating entrypoint after refactor to host model script on uvicorn
+
+CMD ["uvicorn", "acne_model.model_script:this_app", "--host", "0.0.0.0", "--port", "8000"]
 
